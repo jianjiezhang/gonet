@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>反向贪吃蛇</title>
+  </head>
+  <body>
+    <form id="login">
+      <h1>反向贪吃蛇</h1>
+      <p>登录后进入主页。对局仍在本机进行。</p>
+      <label>角色号<input id="roleid" name="roleid" autocomplete="username" /></label>
+      <label>口令<input id="token" name="token" value="dev" autocomplete="current-password" /></label>
+      <button id="login-btn" type="submit">登录</button>
+      <p id="login-err" role="alert"></p>
+    </form>
+    <section id="home" hidden>
+      <h1>反向贪吃蛇</h1>
+      <p id="home-role"></p>
+      <button id="home-profile" type="button">个人资料</button>
+      <button id="home-missions" type="button">任务</button>
+      <button id="home-friends" type="button">好友</button>
+      <button id="home-guild" type="button">公会</button>
+      <button id="home-play" type="button">玩法</button>
+    </section>
+    <section id="profile" hidden>
+      <button id="profile-back" type="button">返回</button>
+      <h2>个人资料</h2>
+      <dl>
+        <div><dt>角色号</dt><dd id="profile-id"></dd></div>
+        <div><dt>名字</dt><dd id="profile-name"></dd></div>
+        <div><dt>等级</dt><dd id="profile-level"></dd></div>
+        <div><dt>性别</dt><dd id="profile-gender"></dd></div>
+      </dl>
+      <label>等级<input id="level" type="number" min="1" step="1" /></label>
+      <button id="level-btn" type="button">修改等级</button>
+      <p id="profile-err" role="alert"></p>
+    </section>
+    <section id="friends" hidden>
+      <button id="friends-back" type="button">返回</button>
+      <h2>好友</h2>
+      <label>角色号<input id="friend-id" autocomplete="off" /></label>
+      <button id="friend-apply" type="button">申请</button>
+      <h3>好友</h3>
+      <ul id="friend-list"></ul>
+      <h3>收到的申请</h3>
+      <ul id="friend-incoming"></ul>
+      <h3>发出的申请</h3>
+      <ul id="friend-outgoing"></ul>
+      <p id="friends-note"></p>
+      <p id="friends-err" role="alert"></p>
+    </section>
+    <section id="guild" hidden>
+      <button id="guild-back" type="button">返回</button>
+      <h2>公会</h2>
+      <div id="guild-create">
+        <h3>创建公会</h3>
+        <label>公会名<input id="guild-name" maxlength="64" autocomplete="off" /></label>
+        <label>公告<input id="guild-notice" maxlength="255" autocomplete="off" /></label>
+        <button id="guild-create-btn" type="button">创建</button>
+      </div>
+      <div id="guild-card"></div>
+      <h3>查找公会</h3>
+      <label>编号或名字<input id="guild-query" autocomplete="off" /></label>
+      <div class="guild-search">
+        <button id="guild-find-id" type="button">按编号</button>
+        <button id="guild-find-name" type="button">按名字</button>
+      </div>
+      <ul id="guild-result"></ul>
+      <h3>全部公会</h3>
+      <ul id="guild-catalog"></ul>
+      <p id="guild-note"></p>
+      <p id="guild-err" role="alert"></p>
+    </section>
+    <section id="missions" hidden>
+      <button id="missions-back" type="button">返回</button>
+      <h2>任务</h2>
+      <ul id="mission-list"></ul>
+      <p id="missions-note"></p>
+      <p id="missions-err" role="alert"></p>
+    </section>
+    <div id="play" hidden>
+      <button id="play-back" type="button">返回</button>
+      <canvas id="game" width="736" height="552"></canvas>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
