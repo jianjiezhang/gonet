@@ -99,7 +99,8 @@ canvas {
 #profile,
 #missions,
 #friends,
-#guild {
+#guild,
+#room {
   width: min(420px, calc(100vw - 32px));
   padding: 28px 28px 22px;
   border-radius: 16px;
@@ -129,6 +130,9 @@ canvas {
 #guild > button,
 #guild-create > button,
 #guild-card > button,
+#room > button,
+#room-idle > button,
+#room-lobby > button,
 #play-back {
   display: block;
   width: 100%;
@@ -141,6 +145,77 @@ canvas {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+}
+
+#room .room-lead {
+  margin: 12px 0 0;
+  text-align: center;
+  color: #9aa8bd;
+  font-size: 14px;
+}
+
+#room label {
+  display: block;
+  margin-top: 16px;
+  color: #c5d0e0;
+  font-size: 13px;
+}
+
+#room input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3e4d63;
+  background: #0b0e13;
+  color: #f4f7fb;
+  font: inherit;
+}
+
+#room-meta {
+  margin: 12px 0 0;
+  color: #c5d0e0;
+  font-size: 14px;
+}
+
+#room-seats {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+#room-seats li {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #0b0e13;
+  border: 1px solid #3e4d63;
+  color: #e8eef7;
+  font-size: 14px;
+}
+
+#room-note:empty,
+#room-err:empty {
+  display: none;
+}
+
+#room-note {
+  margin-top: 12px;
+  color: #9aa8bd;
+  font-size: 13px;
+}
+
+#room-err {
+  margin-top: 12px;
+  color: #ffb4b4;
+  font-size: 13px;
+}
+
+#room-start:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 #home button:first-of-type {

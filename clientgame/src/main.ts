@@ -48,13 +48,30 @@ import { createGame, update, wideView, windowView, type Game, type Input as Chas
 import { createMenu, drawMenu, pickMenuAt, updateMenu, type AppMode, type MenuState } from "./menu";
 import { drawMission } from "./missionDraw";
 import { createMission, updateMission, type Input as MissionInput, type MissionGame } from "./missionGame";
+import { drawDuo } from "./duoDraw";
+import { applyDuoFrame, applyDuoResult, createDuoMatch, tickDuoFx, type DuoMatch } from "./duoGame";
+import {
+  MODE_DUO,
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  parseRoomBegin,
+  parseRoomFrame,
+  parseRoomNotice,
+  parseRoomResult,
+  roomNoticeText,
+  sendRoomDead,
+  sendRoomOp,
+  startRoom,
+  type RoomState,
+} from "./rooms";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
 if (!canvas) throw new Error("找不到画布");
 const ctx = canvas.getContext("2d");
 if (!ctx) throw new Error("找不到 2D 上下文");
 
-type View = "login" | "home" | "profile" | "missions" | "friends" | "guild" | "play";
+type View = "login" | "home" | "profile" | "missions" | "friends" | "guild" | "play" | "room" | "duo";
 let view: View = "login";
 let appMode: AppMode = "menu";
 let menu: MenuState = createMenu();
@@ -62,11 +79,14 @@ let roleID = "";
 let session: Session | null = null;
 let friendBusy = false;
 let guildBusy = false;
+let roomBusy = false;
 let joinedGuild = false;
 let guildHit: GuildBrief | null = null;
 let looping = false;
 let chase: Game | null = null;
 let mission: MissionGame | null = null;
+let duo: DuoMatch | null = null;
+let lobby: RoomState | null = null;
 
 const keys = new Set<string>();
 let spaceEdge = false;
@@ -85,7 +105,7 @@ if (import.meta.env.DEV) {
 
 function resize(): void {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  if (appMode === "arena" && mission) {
+  if ((appMode === "arena" && mission) || (view === "duo" && duo)) {
     canvas!.width = Math.floor(WORLD_W * dpr);
     canvas!.height = Math.floor(WORLD_H * dpr);
     ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -99,7 +119,7 @@ function resize(): void {
 resize();
 window.addEventListener("resize", resize);
 document.addEventListener("fullscreenchange", () => {
-  if (appMode === "arena") resize();
+  if (appMode === "arena" || view === "duo") resize();
 });
 
 window.addEventListener("keydown", (event) => {
@@ -165,6 +185,22 @@ function frame(now: number): void {
   restartEdge = false;
   clickEdge = false;
   escapeEdge = false;
+
+  if (view === "duo" && duo) {
+    if (edges.escapeEdge) {
+      void exitDuoPlay();
+      requestAnimationFrame(frame);
+      return;
+    }
+    tickDuoFx(duo, dt);
+    if (duo.phase === "play" && session) {
+      const dash = edges.spaceEdge;
+      sendRoomOp(session, axis.x, axis.y, dash);
+    }
+    drawDuo(ctx!, duo);
+    requestAnimationFrame(frame);
+    return;
+  }
 
   if (view !== "play") {
     axisPulseX = 0;
@@ -270,6 +306,20 @@ const homeMissionsBtn = document.querySelector<HTMLButtonElement>("#home-mission
 const homeFriendsBtn = document.querySelector<HTMLButtonElement>("#home-friends");
 const homeGuildBtn = document.querySelector<HTMLButtonElement>("#home-guild");
 const homePlayBtn = document.querySelector<HTMLButtonElement>("#home-play");
+const homeRoomBtn = document.querySelector<HTMLButtonElement>("#home-room");
+const room = document.querySelector<HTMLElement>("#room");
+const roomBack = document.querySelector<HTMLButtonElement>("#room-back");
+const roomIdle = document.querySelector<HTMLElement>("#room-idle");
+const roomLobby = document.querySelector<HTMLElement>("#room-lobby");
+const roomCreateBtn = document.querySelector<HTMLButtonElement>("#room-create");
+const roomJoinBtn = document.querySelector<HTMLButtonElement>("#room-join");
+const roomJoinId = document.querySelector<HTMLInputElement>("#room-join-id");
+const roomMeta = document.querySelector<HTMLParagraphElement>("#room-meta");
+const roomSeats = document.querySelector<HTMLUListElement>("#room-seats");
+const roomStartBtn = document.querySelector<HTMLButtonElement>("#room-start");
+const roomLeaveBtn = document.querySelector<HTMLButtonElement>("#room-leave");
+const roomNote = document.querySelector<HTMLParagraphElement>("#room-note");
+const roomErr = document.querySelector<HTMLParagraphElement>("#room-err");
 const missions = document.querySelector<HTMLElement>("#missions");
 const missionsBack = document.querySelector<HTMLButtonElement>("#missions-back");
 const missionList = document.querySelector<HTMLUListElement>("#mission-list");
@@ -349,6 +399,22 @@ async function submitLogin(): Promise<void> {
       const notice = parseGuildNotice(data);
       if (notice) onGuildPush(notice.kind);
     });
+    session.on(Cmd.roomnotify, (data) => {
+      const notice = parseRoomNotice(data);
+      if (notice) onRoomPush(notice);
+    });
+    session.on(Cmd.roombegin, (data) => {
+      const begin = parseRoomBegin(data);
+      if (begin) onRoomBegin(begin);
+    });
+    session.on(Cmd.roomframe, (data) => {
+      const frameMsg = parseRoomFrame(data);
+      if (frameMsg) onRoomFrame(frameMsg);
+    });
+    session.on(Cmd.roomresult, (data) => {
+      const result = parseRoomResult(data);
+      if (result) onRoomResult(result);
+    });
     roleID = id;
     showHome();
   } catch (err) {
@@ -375,6 +441,8 @@ function leave(message: string): void {
   appMode = "menu";
   chase = null;
   mission = null;
+  duo = null;
+  lobby = null;
   menu = createMenu();
   current?.close();
   view = "login";
@@ -383,6 +451,7 @@ function leave(message: string): void {
   if (missions) missions.hidden = true;
   if (friends) friends.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (loginForm) loginForm.hidden = false;
   if (loginErr) loginErr.textContent = message;
@@ -404,6 +473,7 @@ function showHome(): void {
   appMode = "menu";
   chase = null;
   mission = null;
+  duo = null;
   menu = createMenu();
   clearInput();
   if (loginForm) loginForm.hidden = true;
@@ -411,6 +481,7 @@ function showHome(): void {
   if (missions) missions.hidden = true;
   if (friends) friends.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (homeRole) homeRole.textContent = roleID ? `已登录 ${roleID}` : "";
   if (home) home.hidden = false;
@@ -422,6 +493,7 @@ function showProfile(): void {
   if (missions) missions.hidden = true;
   if (friends) friends.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (profile) profile.hidden = false;
   void refreshProfile();
@@ -433,6 +505,7 @@ function showPlay(): void {
   appMode = "menu";
   chase = null;
   mission = null;
+  duo = null;
   menu = createMenu();
   clearInput();
   if (home) home.hidden = true;
@@ -440,10 +513,27 @@ function showPlay(): void {
   if (missions) missions.hidden = true;
   if (friends) friends.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = false;
   resize();
   drawMenu(ctx!, menu, roleID);
   startLoop();
+}
+
+function showRoom(): void {
+  view = "room";
+  duo = null;
+  clearInput();
+  if (home) home.hidden = true;
+  if (profile) profile.hidden = true;
+  if (missions) missions.hidden = true;
+  if (friends) friends.hidden = true;
+  if (guild) guild.hidden = true;
+  if (play) play.hidden = true;
+  if (roomNote) roomNote.textContent = "";
+  if (roomErr) roomErr.textContent = "";
+  renderLobby();
+  if (room) room.hidden = false;
 }
 
 function backFromPlay(): void {
@@ -491,6 +581,44 @@ homeGuildBtn?.addEventListener("click", () => {
 homePlayBtn?.addEventListener("click", () => {
   showPlay();
 });
+homeRoomBtn?.addEventListener("click", () => {
+  showRoom();
+});
+roomBack?.addEventListener("click", () => {
+  void (async () => {
+    if (lobby && session) {
+      try {
+        await leaveRoom(session);
+      } catch {
+        /* 可能已经不在房里 */
+      }
+      lobby = null;
+    }
+    showHome();
+  })();
+});
+roomCreateBtn?.addEventListener("click", () => {
+  void changeRoom("创建", async () => {
+    lobby = await createRoom(session!, MODE_DUO, 2);
+    renderLobby();
+  });
+});
+roomJoinBtn?.addEventListener("click", () => {
+  void sendRoomJoin();
+});
+roomStartBtn?.addEventListener("click", () => {
+  void changeRoom("开始", async () => {
+    lobby = await startRoom(session!);
+    renderLobby();
+  });
+});
+roomLeaveBtn?.addEventListener("click", () => {
+  void changeRoom("离开", async () => {
+    await leaveRoom(session!);
+    lobby = null;
+    renderLobby();
+  });
+});
 profileBack?.addEventListener("click", () => {
   showHome();
 });
@@ -504,6 +632,10 @@ guildBack?.addEventListener("click", () => {
   showHome();
 });
 playBack?.addEventListener("click", () => {
+  if (view === "duo") {
+    void exitDuoPlay();
+    return;
+  }
   backFromPlay();
 });
 friendApplyBtn?.addEventListener("click", () => {
@@ -540,6 +672,7 @@ function showMissions(): void {
   if (profile) profile.hidden = true;
   if (friends) friends.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (missionsNote) missionsNote.textContent = "";
   if (missionsErr) missionsErr.textContent = "";
@@ -596,6 +729,7 @@ function showFriends(): void {
   if (profile) profile.hidden = true;
   if (missions) missions.hidden = true;
   if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (friendsNote) friendsNote.textContent = "";
   if (friendsErr) friendsErr.textContent = "";
@@ -710,6 +844,7 @@ function showGuild(): void {
   if (profile) profile.hidden = true;
   if (missions) missions.hidden = true;
   if (friends) friends.hidden = true;
+  if (room) room.hidden = true;
   if (play) play.hidden = true;
   if (guildNote) guildNote.textContent = "";
   if (guildErr) guildErr.textContent = "";
@@ -926,6 +1061,166 @@ function onGuildPush(kind: string): void {
   if (view !== "guild") return;
   if (guildNote) guildNote.textContent = guildNoticeText(kind);
   void refreshGuild();
+}
+
+function renderLobby(): void {
+  const inRoom = lobby !== null;
+  if (roomIdle) roomIdle.hidden = inRoom;
+  if (roomLobby) roomLobby.hidden = !inRoom;
+  if (!lobby) {
+    if (roomMeta) roomMeta.textContent = "";
+    if (roomSeats) roomSeats.replaceChildren();
+    if (roomStartBtn) roomStartBtn.disabled = true;
+    return;
+  }
+  if (roomMeta) {
+    roomMeta.textContent = `房间 ${lobby.roomid}　模式 ${lobby.mode}　${lobby.seats.length}/${lobby.capacity}　${lobby.phase === "play" ? "对局中" : "等人"}`;
+  }
+  if (roomSeats) {
+    roomSeats.replaceChildren();
+    for (const id of lobby.seats) {
+      const item = document.createElement("li");
+      item.textContent = id === roleID ? `${id}（你）` : id;
+      roomSeats.append(item);
+    }
+    if (lobby.seats.length === 0) {
+      const item = document.createElement("li");
+      item.textContent = "暂无座位";
+      roomSeats.append(item);
+    }
+  }
+  if (roomStartBtn) {
+    roomStartBtn.disabled = roomBusy || lobby.phase !== "wait" || lobby.seats.length < lobby.capacity;
+  }
+}
+
+function lockRoomButtons(locked: boolean): void {
+  roomBusy = locked;
+  if (!room) return;
+  for (const button of room.querySelectorAll("button")) {
+    if (button === roomBack) continue;
+    if (button === roomStartBtn && lobby) {
+      button.disabled = locked || lobby.phase !== "wait" || lobby.seats.length < lobby.capacity;
+      continue;
+    }
+    button.disabled = locked;
+  }
+}
+
+async function changeRoom(label: string, run: () => Promise<void>): Promise<void> {
+  if (!session) return;
+  lockRoomButtons(true);
+  try {
+    await run();
+    if (roomNote) roomNote.textContent = `${label}成功`;
+    if (roomErr) roomErr.textContent = "";
+    renderLobby();
+  } catch (err) {
+    if (roomNote) roomNote.textContent = "";
+    if (roomErr) roomErr.textContent = err instanceof Error ? err.message : `${label}失败`;
+  } finally {
+    lockRoomButtons(false);
+  }
+}
+
+async function sendRoomJoin(): Promise<void> {
+  if (!session || !roomJoinId) return;
+  const roomid = roomJoinId.value.trim();
+  if (!roomid) {
+    if (roomErr) roomErr.textContent = "请填写房间号";
+    return;
+  }
+  await changeRoom("加入", async () => {
+    lobby = await joinRoom(session!, roomid);
+    roomJoinId.value = "";
+    renderLobby();
+  });
+}
+
+function onRoomPush(notice: ReturnType<typeof parseRoomNotice>): void {
+  if (!notice) return;
+  if (notice.kind === "settle") {
+    lobby = null;
+    if (view === "room") {
+      if (roomNote) roomNote.textContent = roomNoticeText(notice.kind);
+      renderLobby();
+    }
+    return;
+  }
+  if (notice.kind === "leave" && notice.roleid === roleID) {
+    lobby = null;
+    if (view === "room") {
+      if (roomNote) roomNote.textContent = roomNoticeText(notice.kind);
+      renderLobby();
+    }
+    return;
+  }
+  if (notice.roomid) {
+    lobby = {
+      roomid: notice.roomid,
+      mode: notice.mode || lobby?.mode || MODE_DUO,
+      capacity: notice.capacity || lobby?.capacity || 2,
+      seats: notice.seats,
+      phase: notice.phase || lobby?.phase || "wait",
+    };
+  }
+  if (view === "room") {
+    if (roomNote) roomNote.textContent = roomNoticeText(notice.kind);
+    renderLobby();
+  }
+}
+
+function onRoomBegin(begin: NonNullable<ReturnType<typeof parseRoomBegin>>): void {
+  lobby = {
+    roomid: begin.roomid,
+    mode: begin.mode,
+    capacity: begin.seats.length,
+    seats: begin.seats,
+    phase: "play",
+  };
+  duo = createDuoMatch(roleID, begin);
+  enterDuoPlay();
+}
+
+function onRoomFrame(frameMsg: NonNullable<ReturnType<typeof parseRoomFrame>>): void {
+  if (!duo || !session) return;
+  const deadFrame = applyDuoFrame(duo, frameMsg);
+  if (deadFrame > 0) sendRoomDead(session, deadFrame);
+}
+
+function onRoomResult(result: NonNullable<ReturnType<typeof parseRoomResult>>): void {
+  if (!duo) return;
+  applyDuoResult(duo, result);
+}
+
+function enterDuoPlay(): void {
+  view = "duo";
+  clearInput();
+  if (home) home.hidden = true;
+  if (profile) profile.hidden = true;
+  if (missions) missions.hidden = true;
+  if (friends) friends.hidden = true;
+  if (guild) guild.hidden = true;
+  if (room) room.hidden = true;
+  if (play) play.hidden = false;
+  void enterWidePlay();
+  resize();
+  startLoop();
+}
+
+async function exitDuoPlay(): Promise<void> {
+  if (duo?.phase === "play" && session) {
+    try {
+      await leaveRoom(session);
+    } catch {
+      /* 场景可能已经结束 */
+    }
+  }
+  duo = null;
+  lobby = null;
+  exitWidePlay();
+  showRoom();
+  if (roomNote) roomNote.textContent = "已离开对局";
 }
 
 async function claim(id: number): Promise<void> {

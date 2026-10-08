@@ -16,9 +16,11 @@
 | onlinemgr | `.onlinemgr_<nodeid>` | 本节点在线名单；登录/下线同步、是否在线、批量查询、广播 |
 | friend | `.friend_<nodeid>` | 全服好友关系和未处理申请。上限 50。不存名字和在线 |
 | guildmgr | `.guildmgr_<nodeid>` | 公会目录：创建、一人一公会、拉起 `guild/<id>`。不管成员细节 |
+| match | `.match_<nodeid>` | 房间目录：创建、加入、离开、人满。开场才拉起 `room/<id>` |
 | watchdog | `.watchdog_<nodeid>` | 接入：listen 协程、login（token）、踢号、按 roleid 建 role |
 | role | `role/<roleid>` | 玩家会话：基础数据、任务模块、TCP、心跳/存盘用 `Timeout` |
 | guild | `guild/<公会id>` | 一个公会一个 actor：成员、申请、公告。由 guildmgr 创建 |
+| room | `room/<房间号>` | 一场已开场的场景。模式 4 有帧循环和目标判定；其它模式仍是空结算 |
 
 另有：
 
@@ -26,7 +28,7 @@
 - `lib/packet`：TCP 长度前缀帧
 - `lib/net`：客户端 `Codec`（默认 JSON），`ReadMsg`/`WriteMsg`
 - `store`：MySQL 连接池，表 `role`、`t_mission`、好友和公会；不是 actor
-- `cmd/client`：登录后可打 `missionlist` / `roleinfo` / `setlevel` / `missionfinish`
+- `cmd/client`：登录后可打任务、好友、公会，以及 `roomcreate` / `roomjoin` / `roomleave` / `roomstart` / `roomsettle`
 - `cmd/debugclient`：连 `127.0.0.1:9999`，行协议 `monitor` / `kill`
 - `web`：提供 `clientgame/dist`。`/api/login` 打一帧登录后关掉。`/api/session` 把浏览器 WebSocket 上的同一帧转到玩家口，连接保持。登录后是主页，再进个人资料、任务或玩法选关。任务走 `missionlist` / `missionfinish`。对局仍在浏览器里算。
 
@@ -59,6 +61,8 @@ project/
     friend/               # 好友边、申请、人数上限
     guildmgr/             # 公会目录：创建、一人一公会、拉起公会 actor
     guild/                # 一个公会一个 actor：成员、申请、公告
+    match/                # 房间目录：等人。开场才拉起场景
+    room/                 # 一场已开场的空场景
     role/                 # BaseData、Missions、persist、TCP cmd
 ```
 
@@ -79,11 +83,12 @@ main
   launcher.WaitService(onlinemgr)              # 先于 watchdog，role 上线时它已经在
   launcher.WaitService(friend)                 # Init 时装载全服好友和申请
   launcher.WaitService(guildmgr)               # 装载公会目录，并拉起已有的 guild/<id>
+  launcher.WaitService(match)                  # 房间目录。场景 actor 开场才有
   launcher.WaitService(watchdog)               # Init 完成后再返回；Init 里 StartAccept
   gonet.ListenDebug(debug_host:debug_port)    # debug_port=0 则跳过
   web.Start(web_host:web_port)                 # 页面、/api/login、/api/session；web_port=0 则跳过
   等待 SIGINT/SIGTERM
-  StopActor(watchdog) → StopActor(friend) → StopActor(guildmgr) → StopActor(onlinemgr) → StopActor(launcher) → gonet.Stop（含 StopDebug）
+  StopActor(watchdog) → StopActor(match) → StopActor(friend) → StopActor(guildmgr) → StopActor(onlinemgr) → StopActor(launcher) → gonet.Stop（含 StopDebug）
 ```
 
 业务服务（含 watchdog、role）**禁止**自己调 `gonet.Spawn` / `SpawnNamed`。一律：
@@ -173,6 +178,22 @@ Accept
 | 26 | S→C | `guildid` | 与列表里的一条相同；没有则 `{err}` |
 | 27 | C→S | `guildname` | `{name}` 按公会名查 |
 | 27 | S→C | `guildname` | 与 `guildid` 的回复相同 |
+| 28 | C→S | `roomcreate` | `{mode, capacity}` 创建等人的房间 |
+| 28 | S→C | `roomcreate` | 房间号、模式、人数、座位、`phase=wait`；或 `{err}` |
+| 29 | C→S | `roomjoin` | `{roomid}` |
+| 29 | S→C | `roomjoin` | 与创建成功相同；或 `{err}` |
+| 30 | C→S | `roomleave` | 等人时离开目录；开场后离开场景 |
+| 30 | S→C | `roomleave` | `"ok"` 或 `{err}` |
+| 31 | C→S | `roomstart` | 人满才开场，拉起 `room/<id>` |
+| 31 | S→C | `roomstart` | `phase=play`；或 `{err}` |
+| 32 | C→S | `roomsettle` | 空结算。还没开场则拒绝 |
+| 32 | S→C | `roomsettle` | `"ok"` 或 `{err}` |
+| 33 | S→C | `roomnotify` | `kind`（join/leave/start/settle）、房间号、座位 |
+| 34 | C→S | `roomop` | `{ax,ay,dash}` 对局操作。Ax/Ay 为 -1/0/1 |
+| 35 | S→C | `roombegin` | 开局：种子、座位、区域、第一个目标、截止帧 |
+| 36 | S→C | `roomframe` | 一帧：帧号、两座位操作、事件、玩家位置 |
+| 37 | S→C | `roomresult` | `{win,reason,index,frame}` 对局结束 |
+| 38 | C→S | `roomdead` | `{frame}` 这一帧被蛇咬到。帧号不能大于已广播的帧 |
 
 进程内 ping 仍是 `gonet.SuspendCallName`（main 启动探测），不走 TCP。harbor 与 harbormgr 之间已是同一帧格式，命令号和结构在 `gonet/services/harbormgr/proto`，和玩家命令号各用各的。debug 口仍是行协议。
 
@@ -238,3 +259,16 @@ go run ./cmd/debugclient              # monitor / kill <pid>
 5. 玩家模块数据挂在 role 上，不要为 mission/hero 再 Spawn 一个 actor。
 6. watchdog 不长期读业务包；login 之后 conn 只属于对应 role。
 7. 不要把玩法写进 `gonet/`。
+8. 等人的房间只放在 `.match_<nodeid>` 里。`room/<id>` 只在开场后存在，不拿 `net.Conn`。
+
+---
+
+## 11. 空房间
+
+`.match_<nodeid>` 一直在。创建、加入、离开、是否人满都在它的 mailbox 里。一场还没开场时只是一条内存记录：房间号、模式、人数上限、座位。一个人同时只在一个房间。人数上限 1 到 8。进程停了，这些记录就没了，不进 MySQL。
+
+人满并且有人 `roomstart` 之后，目录才用 launcher 拉起 `room/<房间号>`。房间号从创建起不变。场景把座位抄进去，不接受新的加入。场景里没有蛇，也没有帧。在座的人 `roomsettle` 后，场景通知各个 `role`，目录忘掉这场，然后场景 `Exit`。目录和两边的 `role` 还在。
+
+开场前离开只改目录。开场后离开交给场景：走一个就放开这一个 roleid；人都走了，场景结束。玩家命令由自己的 `role` 转发。连接不到目录，也不到场景。
+
+模式 4（两人同场信使）：人数必须是 2。开场后场景按 20 帧/秒推进。服务器只推两个玩家的位置，判定是否碰到当前目标、是否超时。目标共 10 个，每个限时 30 秒，碰到即换下一个，蛇速倍数每次 ×1.2。场上固定底部大出发安全区，以及场上两个小安全区；没有单独的庇护区。两人从出发区出生。两条蛇不在服务器上演算：两边客户端用开局种子和这一帧的玩家位置各自计算，规则与 `service/room` 的 `Chase` 相同，并与玩法 3 对齐——格子走、身体跟随、追猎物/闲逛、不进安全区。猎物进安全区后蛇失去目标去闲逛。被咬到的人上报 `roomdead`，该座位之后不再得分。两人都出局则 `roomresult` 的原因是 `bite`。网页主页「双人同场」已接创建/加入/开场与帧画面。

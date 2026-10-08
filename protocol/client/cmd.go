@@ -30,6 +30,17 @@ const (
 	Guilds        = "guilds"
 	GuildID       = "guildid"
 	GuildName     = "guildname"
+	RoomCreate    = "roomcreate"
+	RoomJoin      = "roomjoin"
+	RoomLeave     = "roomleave"
+	RoomStart     = "roomstart"
+	RoomSettle    = "roomsettle"
+	RoomNotify    = "roomnotify"
+	RoomOp        = "roomop"
+	RoomBegin     = "roombegin"
+	RoomFrame     = "roomframe"
+	RoomResult    = "roomresult"
+	RoomDead      = "roomdead"
 )
 
 const (
@@ -60,6 +71,17 @@ const (
 	GuildsID        uint16 = 25
 	GuildIDID       uint16 = 26
 	GuildNameID     uint16 = 27
+	RoomCreateID    uint16 = 28
+	RoomJoinID      uint16 = 29
+	RoomLeaveID     uint16 = 30
+	RoomStartID     uint16 = 31
+	RoomSettleID    uint16 = 32
+	RoomNotifyID    uint16 = 33
+	RoomOpID        uint16 = 34
+	RoomBeginID     uint16 = 35
+	RoomFrameID     uint16 = 36
+	RoomResultID    uint16 = 37
+	RoomDeadID      uint16 = 38
 )
 
 // Bind 把命令名和命令号交给收发层。同一对可以重复登记。
@@ -95,6 +117,17 @@ func Bind(register func(name string, id uint16) error) {
 		{Guilds, GuildsID},
 		{GuildID, GuildIDID},
 		{GuildName, GuildNameID},
+		{RoomCreate, RoomCreateID},
+		{RoomJoin, RoomJoinID},
+		{RoomLeave, RoomLeaveID},
+		{RoomStart, RoomStartID},
+		{RoomSettle, RoomSettleID},
+		{RoomNotify, RoomNotifyID},
+		{RoomOp, RoomOpID},
+		{RoomBegin, RoomBeginID},
+		{RoomFrame, RoomFrameID},
+		{RoomResult, RoomResultID},
+		{RoomDead, RoomDeadID},
 	}
 	for _, p := range pairs {
 		if err := register(p.name, p.id); err != nil {

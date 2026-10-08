@@ -7,7 +7,9 @@ import (
 	"game/service/friend"
 	"game/service/guild"
 	"game/service/guildmgr"
+	"game/service/match"
 	"game/service/onlinemgr"
+	"game/service/room"
 	"game/store"
 	"protocol/client"
 
@@ -126,6 +128,18 @@ func (a *Actor) registerActorCmds() error {
 	if err := gonet.RegisterCmd(a, guild.CmdNotify, func() gonet.MessageInterface { return &guild.NotifyMsg{} }, a.onGuildNotify); err != nil {
 		return err
 	}
+	if err := gonet.RegisterCmd(a, match.CmdNotify, func() gonet.MessageInterface { return &match.NotifyMsg{} }, a.onRoomNotify); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, room.CmdBegin, func() gonet.MessageInterface { return &room.BeginMsg{} }, a.onRoomBegin); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, room.CmdFrame, func() gonet.MessageInterface { return &room.FrameMsg{} }, a.onRoomFrame); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, room.CmdResult, func() gonet.MessageInterface { return &room.ResultMsg{} }, a.onRoomResult); err != nil {
+		return err
+	}
 	if err := gonet.RegisterCmd(a, cmdGuildReady, func() gonet.MessageInterface { return &guildReadyMsg{} }, a.onGuildReady); err != nil {
 		return err
 	}
@@ -218,6 +232,35 @@ type guildNameMsg struct {
 	client.GuildNameReq
 }
 
+type roomCreateMsg struct {
+	gonet.BaseMessage
+	connLink
+	client.RoomCreateReq
+}
+
+type roomJoinMsg struct {
+	gonet.BaseMessage
+	connLink
+	client.RoomJoinReq
+}
+
+type roomPlainMsg struct {
+	gonet.BaseMessage
+	connLink
+}
+
+type roomOpMsg struct {
+	gonet.BaseMessage
+	connLink
+	client.RoomOpReq
+}
+
+type roomDeadMsg struct {
+	gonet.BaseMessage
+	connLink
+	client.RoomDeadReq
+}
+
 func (a *Actor) registerClientCmds() error {
 	if err := gonet.RegisterCmd(a, client.Heartbeat, func() gonet.MessageInterface { return &HeartbeatMsg{} }, a.onHeartbeat); err != nil {
 		return err
@@ -279,5 +322,26 @@ func (a *Actor) registerClientCmds() error {
 	if err := gonet.RegisterCmd(a, client.GuildID, func() gonet.MessageInterface { return &guildIDMsg{} }, a.onGuildID); err != nil {
 		return err
 	}
-	return gonet.RegisterCmd(a, client.GuildName, func() gonet.MessageInterface { return &guildNameMsg{} }, a.onGuildName)
+	if err := gonet.RegisterCmd(a, client.GuildName, func() gonet.MessageInterface { return &guildNameMsg{} }, a.onGuildName); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomCreate, func() gonet.MessageInterface { return &roomCreateMsg{} }, a.onRoomCreate); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomJoin, func() gonet.MessageInterface { return &roomJoinMsg{} }, a.onRoomJoin); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomLeave, func() gonet.MessageInterface { return &roomPlainMsg{} }, a.onRoomLeave); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomStart, func() gonet.MessageInterface { return &roomPlainMsg{} }, a.onRoomStart); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomSettle, func() gonet.MessageInterface { return &roomPlainMsg{} }, a.onRoomSettle); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, client.RoomOp, func() gonet.MessageInterface { return &roomOpMsg{} }, a.onRoomOp); err != nil {
+		return err
+	}
+	return gonet.RegisterCmd(a, client.RoomDead, func() gonet.MessageInterface { return &roomDeadMsg{} }, a.onRoomDead)
 }

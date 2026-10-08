@@ -326,6 +326,168 @@ func NewGuildBrief(cmd string, card GuildBrief) Out {
 	return Out{Cmd: cmd, Body: card}
 }
 
+// RoomCreateReq 是创建等人的房间。Capacity 是人数上限。
+type RoomCreateReq struct {
+	Mode     int `json:"mode"`
+	Capacity int `json:"capacity"`
+}
+
+// RoomJoinReq 是按房间号加入。
+type RoomJoinReq struct {
+	RoomID string `json:"roomid"`
+}
+
+// RoomState 是创建、加入、开场的回复。Phase 是 wait 或 play。
+type RoomState struct {
+	RoomID   string   `json:"roomid"`
+	Mode     int      `json:"mode"`
+	Capacity int      `json:"capacity"`
+	Seats    []string `json:"seats"`
+	Phase    string   `json:"phase"`
+}
+
+// RoomNotifyResp 是座位变化。Kind 是 join、leave、start、settle。
+type RoomNotifyResp struct {
+	Kind     string   `json:"kind"`
+	RoomID   string   `json:"roomid"`
+	RoleID   string   `json:"roleid,omitempty"`
+	Mode     int      `json:"mode,omitempty"`
+	Capacity int      `json:"capacity,omitempty"`
+	Seats    []string `json:"seats,omitempty"`
+	Phase    string   `json:"phase,omitempty"`
+}
+
+func NewRoomCreate(mode, capacity int) Out {
+	return Out{Cmd: RoomCreate, Body: RoomCreateReq{Mode: mode, Capacity: capacity}}
+}
+
+func NewRoomJoin(roomID string) Out {
+	return Out{Cmd: RoomJoin, Body: RoomJoinReq{RoomID: roomID}}
+}
+
+func NewRoomLeave() Out  { return Out{Cmd: RoomLeave} }
+func NewRoomStart() Out  { return Out{Cmd: RoomStart} }
+func NewRoomSettle() Out { return Out{Cmd: RoomSettle} }
+
+func NewRoomState(cmd string, roomID string, mode, capacity int, seats []string, phase string) Out {
+	if seats == nil {
+		seats = []string{}
+	}
+	return Out{Cmd: cmd, Body: RoomState{
+		RoomID: roomID, Mode: mode, Capacity: capacity, Seats: seats, Phase: phase,
+	}}
+}
+
+func NewRoomNotify(kind, roomID, roleID string, mode, capacity int, seats []string, phase string) Out {
+	if seats == nil {
+		seats = []string{}
+	}
+	return Out{Cmd: RoomNotify, Body: RoomNotifyResp{
+		Kind: kind, RoomID: roomID, RoleID: roleID, Mode: mode, Capacity: capacity, Seats: seats, Phase: phase,
+	}}
+}
+
+// RoomOpReq 是对局中一帧操作。Ax/Ay 为 -1、0、1。
+type RoomOpReq struct {
+	Ax   int  `json:"ax"`
+	Ay   int  `json:"ay"`
+	Dash bool `json:"dash"`
+}
+
+// RoomZone 是场上固定区域。
+type RoomZone struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	R    float64 `json:"r"`
+	Kind string  `json:"kind"`
+}
+
+// RoomPlayer 是开局或帧里的一个人。
+type RoomPlayer struct {
+	RoleID string  `json:"roleid"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Alive  bool    `json:"alive"`
+}
+
+// RoomOpFrame 是一帧里一个座位的操作。
+type RoomOpFrame struct {
+	Ax   int  `json:"ax"`
+	Ay   int  `json:"ay"`
+	Dash bool `json:"dash"`
+}
+
+// RoomEvent 是一帧里服务器判定出来的事。
+type RoomEvent struct {
+	Kind   string  `json:"kind"`
+	Index  int     `json:"index,omitempty"`
+	X      float64 `json:"x,omitempty"`
+	Y      float64 `json:"y,omitempty"`
+	Speed  float64 `json:"speed,omitempty"`
+	Until  int     `json:"until,omitempty"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+// RoomBeginResp 是开局包。
+type RoomBeginResp struct {
+	RoomID  string       `json:"roomid"`
+	Mode    int          `json:"mode"`
+	Seed    uint32       `json:"seed"`
+	Seats   []string     `json:"seats"`
+	Zones   []RoomZone   `json:"zones"`
+	Players []RoomPlayer `json:"players"`
+	TargetX float64      `json:"targetx"`
+	TargetY float64      `json:"targety"`
+	Index   int          `json:"index"`
+	Until   int          `json:"until"`
+	Speed   float64      `json:"speed"`
+	FrameHz int          `json:"framehz"`
+	Targets int          `json:"targets"`
+}
+
+// RoomFrameResp 是一帧广播。
+type RoomFrameResp struct {
+	RoomID  string        `json:"roomid"`
+	Frame   int           `json:"frame"`
+	Ops     []RoomOpFrame `json:"ops"`
+	Events  []RoomEvent   `json:"events,omitempty"`
+	Players []RoomPlayer  `json:"players"`
+}
+
+// RoomResultResp 是对局结算。
+type RoomResultResp struct {
+	RoomID string `json:"roomid"`
+	Win    bool   `json:"win"`
+	Reason string `json:"reason"`
+	Index  int    `json:"index"`
+	Frame  int    `json:"frame"`
+}
+
+func NewRoomOp(ax, ay int, dash bool) Out {
+	return Out{Cmd: RoomOp, Body: RoomOpReq{Ax: ax, Ay: ay, Dash: dash}}
+}
+
+func NewRoomBegin(body RoomBeginResp) Out {
+	return Out{Cmd: RoomBegin, Body: body}
+}
+
+func NewRoomFrame(body RoomFrameResp) Out {
+	return Out{Cmd: RoomFrame, Body: body}
+}
+
+func NewRoomResult(body RoomResultResp) Out {
+	return Out{Cmd: RoomResult, Body: body}
+}
+
+// RoomDeadReq 是被蛇咬到。Frame 是已经广播过的那一帧。
+type RoomDeadReq struct {
+	Frame int `json:"frame"`
+}
+
+func NewRoomDead(frame int) Out {
+	return Out{Cmd: RoomDead, Body: RoomDeadReq{Frame: frame}}
+}
+
 // Pack 把正文编成 JSON。body 为 nil 时没有正文。
 func Pack(body any) ([]byte, error) {
 	if body == nil {
@@ -338,7 +500,7 @@ func Pack(body any) ([]byte, error) {
 // 不认识的命令或 JSON 对不上时 ok 为假。
 func DecodeReq(cmd string, data []byte) (any, bool) {
 	switch cmd {
-	case Heartbeat, MissionList, RoleInfo, FriendList, Ping, GuildList, GuildLeave, GuildDisband, Guilds:
+	case Heartbeat, MissionList, RoleInfo, FriendList, Ping, GuildList, GuildLeave, GuildDisband, Guilds, RoomLeave, RoomStart, RoomSettle:
 		return nil, len(data) == 0 || isEmptyObject(data)
 	case Login:
 		return unmarshal[LoginReq](data)
@@ -358,6 +520,14 @@ func DecodeReq(cmd string, data []byte) (any, bool) {
 		return unmarshal[GuildIDReq](data)
 	case GuildName:
 		return unmarshal[GuildNameReq](data)
+	case RoomCreate:
+		return unmarshal[RoomCreateReq](data)
+	case RoomJoin:
+		return unmarshal[RoomJoinReq](data)
+	case RoomOp:
+		return unmarshal[RoomOpReq](data)
+	case RoomDead:
+		return unmarshal[RoomDeadReq](data)
 	default:
 		return nil, false
 	}
@@ -402,6 +572,16 @@ func DecodeRsp(cmd string, data []byte) (any, bool) {
 		return unmarshal[GuildsResp](data)
 	case GuildID, GuildName:
 		return unmarshal[GuildBrief](data)
+	case RoomCreate, RoomJoin, RoomStart:
+		return unmarshal[RoomState](data)
+	case RoomNotify:
+		return unmarshal[RoomNotifyResp](data)
+	case RoomBegin:
+		return unmarshal[RoomBeginResp](data)
+	case RoomFrame:
+		return unmarshal[RoomFrameResp](data)
+	case RoomResult:
+		return unmarshal[RoomResultResp](data)
 	default:
 		return nil, false
 	}

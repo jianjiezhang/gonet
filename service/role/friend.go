@@ -121,6 +121,9 @@ func (a *Actor) onCallResponse(e gonet.Envelope) {
 	if !ok || m == nil {
 		return
 	}
+	if a.takeRoomResponse(m) {
+		return
+	}
 	if a.takeGuildResponse(m) {
 		return
 	}

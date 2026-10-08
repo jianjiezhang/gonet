@@ -46,6 +46,9 @@ type Actor struct {
 	listBuilds    map[uint64]*listBuild
 	onlineWaits   map[uint64]uint64
 	guildWaits    map[uint64]guildWait
+	roomWaits     map[uint64]roomWait
+	roomID        string
+	roomPlay      bool
 	nextBuild     uint64
 }
 
@@ -108,6 +111,7 @@ func (a *Actor) Init() error {
 	a.listBuilds = make(map[uint64]*listBuild)
 	a.onlineWaits = make(map[uint64]uint64)
 	a.guildWaits = make(map[uint64]guildWait)
+	a.roomWaits = make(map[uint64]roomWait)
 	a.data = data
 	a.data.Base.bindChange(func() {
 		a.markDirty()
@@ -136,6 +140,7 @@ func (a *Actor) Init() error {
 }
 
 func (a *Actor) Term() {
+	a.noteRoomOff()
 	slog.Info("service stopped", "service", "role", "pid", a.Self(), "name", a.SelfName())
 	a.noteLogout()
 	a.saveWG.Wait()
@@ -322,11 +327,19 @@ func (a *Actor) write(msg client.Out) error {
 	return msg.Send(a.writeCmd)
 }
 
+// logFrame 记下一条玩家协议。心跳几秒一次，收发都不打。
+func logFrame(dir, cmd string, payload any) {
+	if cmd == client.Heartbeat {
+		return
+	}
+	slog.Info(gamenet.FrameLog(dir, cmd, payload))
+}
+
 func (a *Actor) writeCmd(cmd string, payload any) error {
 	if a.conn == nil {
 		return nil
 	}
-	slog.Info(gamenet.FrameLog("send", cmd, payload))
+	logFrame("send", cmd, payload)
 	_ = a.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	err := gamenet.WriteMsg(a.conn, cmd, payload)
 	if err == nil {
@@ -362,7 +375,7 @@ func (a *Actor) readLoop() {
 			}
 			return
 		}
-		slog.Info(gamenet.FrameLog("recv", gamenet.Cmd(msg), msg))
+		logFrame("recv", gamenet.Cmd(msg), msg)
 		if gamenet.Cmd(msg) == "" {
 			slog.Warn("role empty cmd", "alias", alias)
 			continue

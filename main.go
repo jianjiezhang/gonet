@@ -16,6 +16,7 @@ import (
 	"game/config"
 	"game/service/friend"
 	"game/service/guildmgr"
+	"game/service/match"
 	"game/service/onlinemgr"
 	"game/service/watchdog"
 	"game/store"
@@ -70,6 +71,7 @@ func main() {
 	onlinemgr.Bind(nodeID)
 	friend.Bind(nodeID)
 	guildmgr.Bind(nodeID)
+	match.Bind(nodeID)
 	watchdog.Bind(nodeID)
 
 	fail := func(msg string, err error) {
@@ -114,6 +116,10 @@ func main() {
 	if err != nil {
 		fail("new guildmgr", err)
 	}
+	matchPID, err := launcher.WaitService(svcCtx, match.New(), match.Name)
+	if err != nil {
+		fail("new match", err)
+	}
 
 	watchdogPID, err := launcher.WaitService(svcCtx, watchdog.New(), watchdog.Name)
 	if err != nil {
@@ -153,6 +159,9 @@ func main() {
 	stopCluster()
 	if err := gonet.StopActor(watchdogPID); err != nil {
 		slog.Error("stop watchdog", "err", err)
+	}
+	if err := gonet.StopActor(matchPID); err != nil {
+		slog.Error("stop match", "err", err)
 	}
 	if err := gonet.StopActor(friendPID); err != nil {
 		slog.Error("stop friend", "err", err)

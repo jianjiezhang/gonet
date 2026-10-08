@@ -8,7 +8,7 @@
   <body>
     <form id="login">
       <h1>反向贪吃蛇</h1>
-      <p>登录后进入主页。对局仍在本机进行。</p>
+      <p>登录后进入主页。单机玩法在本机，双人同场走服务器。</p>
       <label>角色号<input id="roleid" name="roleid" autocomplete="username" /></label>
       <label>口令<input id="token" name="token" value="dev" autocomplete="current-password" /></label>
       <button id="login-btn" type="submit">登录</button>
@@ -21,7 +21,27 @@
       <button id="home-missions" type="button">任务</button>
       <button id="home-friends" type="button">好友</button>
       <button id="home-guild" type="button">公会</button>
-      <button id="home-play" type="button">玩法</button>
+      <button id="home-play" type="button">单机玩法</button>
+      <button id="home-room" type="button">双人同场</button>
+    </section>
+    <section id="room" hidden>
+      <button id="room-back" type="button">返回</button>
+      <h2>双人同场</h2>
+      <p class="room-lead">模式 4 · 两人 · 10 个目标 · 两条蛇由两边各自演算</p>
+      <div id="room-idle">
+        <button id="room-create" type="button">创建房间</button>
+        <label>房间号<input id="room-join-id" autocomplete="off" /></label>
+        <button id="room-join" type="button">加入</button>
+      </div>
+      <div id="room-lobby" hidden>
+        <p id="room-meta"></p>
+        <h3>座位</h3>
+        <ul id="room-seats"></ul>
+        <button id="room-start" type="button">开始</button>
+        <button id="room-leave" type="button">离开</button>
+      </div>
+      <p id="room-note"></p>
+      <p id="room-err" role="alert"></p>
     </section>
     <section id="profile" hidden>
       <button id="profile-back" type="button">返回</button>

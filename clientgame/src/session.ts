@@ -26,6 +26,17 @@ export const Cmd = {
   guilds: 25,
   guildid: 26,
   guildname: 27,
+  roomcreate: 28,
+  roomjoin: 29,
+  roomleave: 30,
+  roomstart: 31,
+  roomsettle: 32,
+  roomnotify: 33,
+  roomop: 34,
+  roombegin: 35,
+  roomframe: 36,
+  roomresult: 37,
+  roomdead: 38,
 } as const;
 
 export interface FriendNotice {
