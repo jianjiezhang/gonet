@@ -23,12 +23,10 @@ export const ARENA_BEACON_TIME = 30;
 export const ARENA_TARGET_COUNT = 5;
 /** 玩法 3：底部开始区半径。 */
 export const START_RADIUS = 160;
-/** 玩法 3：四处常驻庇护所。 */
-export const ARENA_SAFES: { x: number; y: number }[] = [
-  cellCenter(10, 8),
-  cellCenter(46, 8),
-  cellCenter(10, 28),
-  cellCenter(46, 28),
+/** 玩法 3：一处安全区、一处庇护区，都一直安全。 */
+export const ARENA_SAFES: { x: number; y: number; mark: "safe" | "shelter" }[] = [
+  { ...cellCenter(14, 10), mark: "safe" },
+  { ...cellCenter(42, 14), mark: "shelter" },
 ];
 
 export const MISSION_SAVE_KEY = "clientgame.mission.best";

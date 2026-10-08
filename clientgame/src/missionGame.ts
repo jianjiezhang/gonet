@@ -81,6 +81,12 @@ interface Snake {
   wanderY: number;
   wanderRetarget: number;
   acc: number;
+  /** 玩法 3：距下次选目标的秒数。 */
+  decideIn: number;
+  /** 玩法 3：本秒是追猎物还是闲逛。 */
+  aim: "prey" | "wander";
+  /** 玩法 3：锁定的猎物，-1 为玩家。 */
+  aimId: number;
 }
 
 interface Mover {
@@ -110,6 +116,8 @@ export interface SafeZone {
   radius: number;
   /** 玩法 3 底部开始区。 */
   start?: boolean;
+  /** 玩法 3：安全区或庇护区。两者都提供保护。 */
+  mark?: "safe" | "shelter";
 }
 
 export interface Beacon {
@@ -215,6 +223,9 @@ function emptySnake(): Snake {
     wanderY: WORLD_H / 2,
     wanderRetarget: 0,
     acc: 0,
+    decideIn: 0,
+    aim: "wander",
+    aimId: -2,
   };
 }
 
@@ -317,6 +328,9 @@ function layout(game: MissionGame): void {
     : [{ x: 12, y: 10, dir: RIGHT, wx: WORLD_W * 0.3, wy: WORLD_H * 0.4 }];
   game.snakes = spots.map((spot) => placeSnake(spot.x, spot.y, spot.dir, spot.wx, spot.wy));
   game.snake = game.snakes[0];
+  if (wide) {
+    for (const snake of game.snakes) snake.decideIn = rand(game);
+  }
 
   const used = new Set<number>();
   game.safes = [];
@@ -329,6 +343,7 @@ function layout(game: MissionGame): void {
         phaseT: Number.POSITIVE_INFINITY,
         candidateIndex: idx,
         radius: SAFE_RADIUS,
+        mark: c.mark,
       });
     });
     game.safes.push({
@@ -605,6 +620,7 @@ function moveMover(
   }
 
   let speed = isPlayer ? PLAYER_SPEED : PLAYER_SPEED * 0.88;
+  if (game.view.wide) speed *= 2;
   if (m.dash > 0) speed *= DASH_MULT;
   const dx = (len > 0 ? ax : m.dash > 0 ? m.facingX : 0) * speed * dt;
   const dy = (len > 0 ? ay : m.dash > 0 ? m.facingY : 0) * speed * dt;
@@ -750,6 +766,21 @@ function tickSnake(game: MissionGame, snake: Snake, dt: number): void {
   snake.anger = Math.max(0, snake.anger - dt);
   snake.phaseThrough = Math.max(0, snake.phaseThrough - dt);
   snake.wanderRetarget = Math.max(0, snake.wanderRetarget - dt);
+  if (game.view.wide) {
+    if (holdsPreyLock(game, snake)) {
+      snake.decideIn = 1;
+    } else if (snake.aim === "prey") {
+      snake.decideIn = 1;
+      chooseSnakeAim(game, snake);
+    } else {
+      snake.decideIn -= dt;
+      if (snake.decideIn <= 0) {
+        snake.decideIn += 1;
+        if (snake.decideIn <= 0) snake.decideIn = 1;
+        chooseSnakeAim(game, snake);
+      }
+    }
+  }
 
   if (snake.mode === "recover") {
     snake.modeT -= dt;
@@ -808,7 +839,65 @@ function exposedPrey(game: MissionGame): Mover[] {
   return list;
 }
 
+function holdsPreyLock(game: MissionGame, snake: Snake): boolean {
+  if (snake.aim !== "prey") return false;
+  const prey = preyById(game, snake.aimId);
+  return prey != null && !isProtectedAt(game, prey.x, prey.y);
+}
+
+/** 玩法 3：到最近区外猎物小于该距离时，用近距离权重。约 12 格。 */
+const SNAKE_NEAR_DIST = CELL * 12;
+
+function chooseSnakeAim(game: MissionGame, snake: Snake): void {
+  const prey = exposedPrey(game);
+  if (prey.length === 0) {
+    wanderSnake(game, snake);
+    return;
+  }
+  const head = headPixelOf(snake);
+  let nearest = prey[0];
+  let nearestD = dist(head.x, head.y, nearest.x, nearest.y);
+  for (const m of prey) {
+    const d = dist(head.x, head.y, m.x, m.y);
+    if (d < nearestD) {
+      nearestD = d;
+      nearest = m;
+    }
+  }
+  const near = nearestD < SNAKE_NEAR_DIST;
+  const roll = rand(game);
+  const nearestCut = near ? 0.6 : 0.4;
+  const fartherCut = near ? 1 : 0.8;
+  if (roll < nearestCut) {
+    snake.aim = "prey";
+    snake.aimId = nearest.botId;
+    return;
+  }
+  if (roll < fartherCut) {
+    const others = prey.filter((m) => m !== nearest);
+    if (others.length > 0) {
+      const pick = others[Math.floor(rand(game) * others.length)];
+      snake.aim = "prey";
+      snake.aimId = pick.botId;
+      return;
+    }
+  }
+  wanderSnake(game, snake);
+}
+
+function wanderSnake(game: MissionGame, snake: Snake): void {
+  snake.aim = "wander";
+  snake.wanderRetarget = 0;
+  ensureWanderTarget(game);
+}
+
+function preyById(game: MissionGame, id: number): Mover | null {
+  if (id === -1) return game.player.alive ? game.player : null;
+  return game.bots.find((bot) => bot.alive && bot.botId === id) ?? null;
+}
+
 function huntFocus(game: MissionGame): { x: number; y: number } {
+  if (game.view.wide) return wideHuntFocus(game);
   const prey = exposedPrey(game);
   if (prey.length === 0) {
     ensureWanderTarget(game);
@@ -832,6 +921,22 @@ function huntFocus(game: MissionGame): { x: number; y: number } {
     x: clamp(best.x + best.vx * look, CELL, WORLD_W - CELL),
     y: clamp(best.y + best.vy * look, CELL, WORLD_H - CELL),
   };
+}
+
+function wideHuntFocus(game: MissionGame): { x: number; y: number } {
+  const snake = game.snake;
+  if (snake.aim === "prey") {
+    const m = preyById(game, snake.aimId);
+    if (m) {
+      const look = 0.35;
+      return {
+        x: clamp(m.x + m.vx * look, CELL, WORLD_W - CELL),
+        y: clamp(m.y + m.vy * look, CELL, WORLD_H - CELL),
+      };
+    }
+  }
+  ensureWanderTarget(game);
+  return { x: snake.wanderX, y: snake.wanderY };
 }
 
 function ensureWanderTarget(game: MissionGame): void {

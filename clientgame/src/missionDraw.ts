@@ -118,6 +118,14 @@ function safeStyle(zone: SafeZone): { fill: string; stroke: string; text: string
       label: "开始",
     };
   }
+  if (zone.mark === "safe") {
+    return {
+      fill: "rgba(80, 180, 160, 0.22)",
+      stroke: "#5ec8b0",
+      text: "#b8fff0",
+      label: "安全区",
+    };
+  }
   switch (zone.phase) {
     case "ready":
       return {
@@ -368,6 +376,8 @@ function drawMinimap(ctx: CanvasRenderingContext2D, game: MissionGame): void {
     if (zone.phase === "cooldown") continue;
     ctx.fillStyle = zone.start
       ? "#7eb6ff"
+      : zone.mark === "safe"
+        ? "#5ec8b0"
       : zone.phase === "unstable"
         ? "#ffb04a"
         : zone.phase === "collapse"
@@ -565,10 +575,11 @@ function drawBrief(ctx: CanvasRenderingContext2D, game: MissionGame): void {
   ctx.fillStyle = "#d5deea";
   const lines = game.view.wide
     ? [
-        "底部蓝色开始区集合出发。四角是一直安全的庇护所。",
+        "底部蓝色开始区集合出发。另有一处安全区和一处庇护区，都一直安全。",
         "场上一次只出现一个目标，位置随机。碰到后才出现下一个。",
         "每个目标限时 30 秒，碰满 5 个才算完成，超时失败。",
-        "蛇会直接追最近的区外猎物，不会自撞，也没有红色冲刺。",
+        "离猎物近：60% 锁最近的区外猎物，40% 锁更远的。",
+        "离得远：40% 最近，40% 更远，20% 闲逛。锁定后一直追到对方进区或倒下。",
       ]
     : [
         "限时 3 分钟，按顺序站上信标 A → B → C（每站约 1 秒）。",
