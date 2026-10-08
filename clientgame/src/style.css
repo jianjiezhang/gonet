@@ -1,0 +1,405 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #0b0e13;
+  color: #e8eef7;
+  font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+body {
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px 0;
+}
+
+canvas {
+  width: min(736px, calc(100vw - 24px));
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+  cursor: pointer;
+}
+
+#login {
+  width: min(420px, calc(100vw - 32px));
+  padding: 28px 28px 22px;
+  border-radius: 16px;
+  background: #141a24;
+  border: 1px solid #46556d;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+#login h1 {
+  margin: 0;
+  text-align: center;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+#login p {
+  margin: 12px 0 0;
+  text-align: center;
+  color: #9aa8bd;
+  font-size: 14px;
+}
+
+#login label {
+  display: block;
+  margin-top: 16px;
+  color: #c5d0e0;
+  font-size: 13px;
+}
+
+#login input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3e4d63;
+  background: #0b0e13;
+  color: #f4f7fb;
+  font: inherit;
+}
+
+#login button {
+  display: block;
+  width: 100%;
+  margin-top: 20px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #2a6280;
+  color: #e8fbff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#login button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+#login-err:empty {
+  display: none;
+}
+
+#login-err {
+  color: #ffb4b4;
+}
+
+#home,
+#profile,
+#missions,
+#friends,
+#guild {
+  width: min(420px, calc(100vw - 32px));
+  padding: 28px 28px 22px;
+  border-radius: 16px;
+  background: #141a24;
+  border: 1px solid #46556d;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+#home h1 {
+  margin: 0;
+  text-align: center;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+#home p {
+  margin: 12px 0 0;
+  text-align: center;
+  color: #9aa8bd;
+  font-size: 14px;
+}
+
+#home button,
+#profile button,
+#missions > button,
+#friends > button,
+#guild > button,
+#guild-create > button,
+#guild-card > button,
+#play-back {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #2a6280;
+  color: #e8fbff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#home button:first-of-type {
+  margin-top: 22px;
+}
+
+#play:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: min(736px, calc(100vw - 24px));
+}
+
+#play.wide:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  width: 100vw;
+  height: 100vh;
+  gap: 0;
+  background: #0b0e13;
+}
+
+#play-back {
+  width: auto;
+  align-self: flex-start;
+  margin-top: 0;
+  padding: 8px 16px;
+}
+
+#play.wide #play-back {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  top: 12px;
+  opacity: 0.85;
+}
+
+#play canvas {
+  width: 100%;
+}
+
+#play.wide canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+#profile,
+#missions,
+#friends,
+#guild {
+  padding: 16px 16px 14px;
+}
+
+#profile h2,
+#missions h2,
+#friends h2,
+#guild h2 {
+  margin: 14px 0 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+#profile dl {
+  margin: 12px 0 0;
+}
+
+#profile dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+#profile dt {
+  color: #9aa8bd;
+}
+
+#profile dd {
+  margin: 0;
+  text-align: right;
+}
+
+#friends h3,
+#guild h3 {
+  margin: 18px 0 0;
+  color: #9aa8bd;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#profile label,
+#friends label,
+#guild label {
+  display: block;
+  margin-top: 16px;
+  color: #c5d0e0;
+  font-size: 13px;
+}
+
+#profile input,
+#friends input,
+#guild input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #3e4d63;
+  background: #0b0e13;
+  color: #f4f7fb;
+  font: inherit;
+}
+
+#profile button:disabled,
+#friends button:disabled,
+#guild button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+#profile-err:empty,
+#missions-err:empty,
+#missions-note:empty,
+#friends-err:empty,
+#friends-note:empty,
+#guild-err:empty,
+#guild-note:empty {
+  display: none;
+}
+
+#profile-err,
+#missions-err,
+#friends-err,
+#guild-err {
+  margin: 10px 0 0;
+  color: #ffb4b4;
+  font-size: 13px;
+}
+
+#mission-list,
+#friend-list,
+#friend-incoming,
+#friend-outgoing,
+#guild ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+#mission-list li,
+#friend-list li,
+#friend-incoming li,
+#friend-outgoing li,
+#guild li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+#friend-list li,
+#friend-incoming li,
+#friend-outgoing li,
+#guild li {
+  align-items: flex-start;
+  line-height: 1.4;
+}
+
+#mission-list li {
+  align-items: flex-start;
+}
+
+.mission-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mission-reward {
+  color: #f3d48a;
+  font-weight: 700;
+}
+#mission-list button,
+#friends li button,
+#guild li button {
+  width: auto;
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #2a6280;
+  color: #e8fbff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#mission-list button:disabled,
+#friends li button:disabled,
+#guild li button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+#guild {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.guild-empty,
+.guild-meta {
+  margin: 10px 0 0;
+  color: #c5d0e0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.guild-empty {
+  color: #9aa8bd;
+}
+
+.guild-search {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.guild-search button {
+  flex: 1;
+  margin: 0;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #2a6280;
+  color: #e8fbff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.row-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+#missions-note,
+#friends-note,
+#guild-note {
+  margin: 10px 0 0;
+  color: #b7e3c5;
+  font-size: 13px;
+}
