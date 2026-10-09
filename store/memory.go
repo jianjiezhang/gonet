@@ -93,6 +93,45 @@ func (m *Memory) LoadMission(_ context.Context, roleid string) (MissionBlob, err
 	return MissionBlob{RoleID: roleid, Data: out}, nil
 }
 
+func (m *Memory) LoadPlayer(_ context.Context, roleid string) (RoleRow, MissionBlob, error) {
+	if roleid == "" {
+		return RoleRow{}, MissionBlob{}, ErrEmptyAlias
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.roles[roleid]
+	if !ok {
+		return RoleRow{}, MissionBlob{}, ErrNotFound
+	}
+	data, ok := m.missions[roleid]
+	if !ok {
+		return row, MissionBlob{RoleID: roleid, Data: EmptyMissionJSON()}, nil
+	}
+	out := make([]byte, len(data))
+	copy(out, data)
+	return row, MissionBlob{RoleID: roleid, Data: out}, nil
+}
+
+func (m *Memory) SavePlayer(_ context.Context, row RoleRow, blob MissionBlob) error {
+	if row.RoleID == "" || blob.RoleID == "" || row.RoleID != blob.RoleID {
+		return ErrEmptyAlias
+	}
+	data := blob.Data
+	if len(data) == 0 {
+		data = EmptyMissionJSON()
+	}
+	out := make([]byte, len(data))
+	copy(out, data)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.roles[row.RoleID]; !ok {
+		return ErrNotFound
+	}
+	m.roles[row.RoleID] = row
+	m.missions[blob.RoleID] = out
+	return nil
+}
+
 func (m *Memory) SaveMission(_ context.Context, blob MissionBlob) error {
 	if blob.RoleID == "" {
 		return ErrEmptyAlias
@@ -141,6 +180,21 @@ func (m *Memory) AddFriends(_ context.Context, a, b string) error {
 	defer m.mu.Unlock()
 	m.linkFriend(a, b)
 	m.linkFriend(b, a)
+	return nil
+}
+
+func (m *Memory) AcceptFriend(_ context.Context, self, from string) error {
+	if self == "" || from == "" || self == from {
+		return ErrEmptyAlias
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.linkFriend(self, from)
+	m.linkFriend(from, self)
+	delete(m.requests[from], self)
+	if len(m.requests[from]) == 0 {
+		delete(m.requests, from)
+	}
 	return nil
 }
 

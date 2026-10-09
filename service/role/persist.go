@@ -44,20 +44,14 @@ func (a *Actor) flushSave(async bool) {
 		a.saveWG.Add(1)
 		go func() {
 			defer a.saveWG.Done()
-			if err := SaveRole(row); err != nil {
+			if err := SavePlayer(row, blob); err != nil {
 				slog.Error("persist async", "roleid", row.RoleID, "err", err)
-			}
-			if err := SaveMission(blob); err != nil {
-				slog.Error("persist async mission", "roleid", blob.RoleID, "err", err)
 			}
 		}()
 		return
 	}
-	if err := saveRoleTimeout(persistTimeout, row); err != nil {
+	if err := savePlayerTimeout(persistTimeout, row, blob); err != nil {
 		slog.Error("persist term", "roleid", row.RoleID, "err", err)
-	}
-	if err := saveMissionTimeout(persistTimeout, blob); err != nil {
-		slog.Error("persist term mission", "roleid", blob.RoleID, "err", err)
 	}
 	a.dirty = false
 }

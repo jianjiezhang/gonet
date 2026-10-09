@@ -59,3 +59,34 @@ func (s *mysqlStore) SaveMission(ctx context.Context, blob MissionBlob) error {
 		blob.RoleID, data, data)
 	return err
 }
+
+// SavePlayer 在一个事务里写角色和任务。两张表都成功才提交。
+func (s *mysqlStore) SavePlayer(ctx context.Context, row RoleRow, blob MissionBlob) error {
+	if row.RoleID == "" || blob.RoleID == "" || row.RoleID != blob.RoleID {
+		return ErrEmptyAlias
+	}
+	data := blob.Data
+	if len(data) == 0 {
+		data = EmptyMissionJSON()
+	}
+	return s.db.Within(ctx, func(tx *mysql.Tx) error {
+		res, err := tx.Exec(ctx,
+			`UPDATE role SET level = ?, name = ?, gender = ?, lastlogintime = ?, lastlogouttime = ? WHERE roleid = ?`,
+			row.Level, row.Name, row.Gender, row.LastLoginTime, row.LastLogoutTime, row.RoleID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO t_mission (roleid, data) VALUES (?, CAST(? AS JSON))
+			 ON DUPLICATE KEY UPDATE data = CAST(? AS JSON)`,
+			blob.RoleID, data, data)
+		return err
+	})
+}

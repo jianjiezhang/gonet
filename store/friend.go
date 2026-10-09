@@ -1,6 +1,10 @@
 package store
 
-import "context"
+import (
+	"context"
+
+	"gonet/mysql"
+)
 
 func (s *mysqlStore) LoadFriends(ctx context.Context) ([]FriendEdge, error) {
 	rows, err := s.db.Query(ctx, `SELECT roleid, friendid FROM friend`)
@@ -44,6 +48,22 @@ func (s *mysqlStore) AddFriends(ctx context.Context, a, b string) error {
 		`INSERT IGNORE INTO friend (roleid, friendid) VALUES (?, ?), (?, ?)`,
 		a, b, b, a)
 	return err
+}
+
+// AcceptFriend 把 from 向 self 的申请变成双向好友，并删掉这条申请。
+func (s *mysqlStore) AcceptFriend(ctx context.Context, self, from string) error {
+	if self == "" || from == "" || self == from {
+		return ErrEmptyAlias
+	}
+	return s.db.Within(ctx, func(tx *mysql.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT IGNORE INTO friend (roleid, friendid) VALUES (?, ?), (?, ?)`,
+			self, from, from, self); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM friend_request WHERE fromid = ? AND toid = ?`, from, self)
+		return err
+	})
 }
 
 func (s *mysqlStore) RemoveFriends(ctx context.Context, a, b string) error {

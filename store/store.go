@@ -64,10 +64,13 @@ type Store interface {
 	SaveRole(ctx context.Context, row RoleRow) error
 	LoadMission(ctx context.Context, roleid string) (MissionBlob, error)
 	SaveMission(ctx context.Context, blob MissionBlob) error
+	LoadPlayer(ctx context.Context, roleid string) (RoleRow, MissionBlob, error)
+	SavePlayer(ctx context.Context, row RoleRow, blob MissionBlob) error
 	LoadFriends(ctx context.Context) ([]FriendEdge, error)
 	LoadFriendRequests(ctx context.Context) ([]FriendRequest, error)
 	AddFriends(ctx context.Context, a, b string) error
 	RemoveFriends(ctx context.Context, a, b string) error
+	AcceptFriend(ctx context.Context, self, from string) error
 	AddFriendRequest(ctx context.Context, req FriendRequest) error
 	RemoveFriendRequest(ctx context.Context, fromID, toID string) error
 	LoadGuilds(ctx context.Context) ([]GuildRow, error)

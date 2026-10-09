@@ -14,9 +14,10 @@
 |------|------|------|
 | launcher | `.launcher_<nodeid>` | 进程内第一个服务；唯一「业务创建 actor」入口 |
 | onlinemgr | `.onlinemgr_<nodeid>` | 本节点在线名单；登录/下线同步、是否在线、批量查询、广播 |
-| friend | `.friend_<nodeid>` | 全服好友关系和未处理申请。上限 50。不存名字和在线 |
-| guildmgr | `.guildmgr_<nodeid>` | 公会目录：创建、一人一公会、拉起 `guild/<id>`。不管成员细节 |
-| match | `.match_<nodeid>` | 房间目录：创建、加入、离开、人满。开场才拉起 `room/<id>` |
+| friend | `.friend` | 全服好友关系和未处理申请。上限 50。不存名字和在线 |
+| guildmgr | `.guildmgr` | 公会目录：创建、一人一公会、拉起 `guild/<id>`。不管成员细节 |
+| match | `.match` | 房间目录：创建、加入、离开、人满。开场才拉起 `room/<id>` |
+| idgen | `.idgen` | 全服编号。只在 `center = true` 的进程启动。按种类各自递增，种类名由调用方传入 |
 | watchdog | `.watchdog_<nodeid>` | 接入：listen 协程、login（token）、踢号、按 roleid 建 role |
 | role | `role/<roleid>` | 玩家会话：基础数据、任务模块、TCP、心跳/存盘用 `Timeout` |
 | guild | `guild/<公会id>` | 一个公会一个 actor：成员、申请、公告。由 guildmgr 创建 |
@@ -62,6 +63,7 @@ project/
     guildmgr/             # 公会目录：创建、一人一公会、拉起公会 actor
     guild/                # 一个公会一个 actor：成员、申请、公告
     match/                # 房间目录：等人。开场才拉起场景
+    idgen/                # 全服编号。只在 center 启动。角色、公会、房间还没改来这里取号
     room/                 # 一场已开场的空场景
     role/                 # BaseData、Missions、persist、TCP cmd
 ```
@@ -80,6 +82,7 @@ main
   store.Open（装上本进程唯一的 store，actor 用 store.Get 取）
   gonet.SpawnNamed(launcher, ".launcher")
   gonet.WaitInit(launcher)
+  center = true 时 launcher.WaitService(idgen)  # 全服编号。其它节点不启动
   launcher.WaitService(onlinemgr)              # 先于 watchdog，role 上线时它已经在
   launcher.WaitService(friend)                 # Init 时装载全服好友和申请
   launcher.WaitService(guildmgr)               # 装载公会目录，并拉起已有的 guild/<id>
@@ -88,7 +91,7 @@ main
   gonet.ListenDebug(debug_host:debug_port)    # debug_port=0 则跳过
   web.Start(web_host:web_port)                 # 页面、/api/login、/api/session；web_port=0 则跳过
   等待 SIGINT/SIGTERM
-  StopActor(watchdog) → StopActor(match) → StopActor(friend) → StopActor(guildmgr) → StopActor(onlinemgr) → StopActor(launcher) → gonet.Stop（含 StopDebug）
+  StopActor(watchdog) → StopActor(match) → StopActor(friend) → StopActor(guildmgr) → StopActor(idgen) → StopActor(onlinemgr) → StopActor(launcher) → gonet.Stop（含 StopDebug）
 ```
 
 业务服务（含 watchdog、role）**禁止**自己调 `gonet.Spawn` / `SpawnNamed`。一律：
@@ -207,7 +210,7 @@ Accept
 - onlinemgr 按 roleid 记在线。下线消息里的 pid 必须等于当前记录，避免旧会话的下线抹掉新登录。查询是 Call `online.query`，回复 bool。`online.broadcast.all` / `online.broadcast.some` 把客户端 cmd 和 JSON 文本转成 `online.push`，由 role 写出连接。`some` 只发给名单里仍在线的人。
 - `BaseData` 字段不导出。`SetLevel` 会 `Notify("level")` 推进任务。
 - **任务**：静态定义在 `config/mission.go`（等级链 1001→1002→1003）。进度整包 JSON 存在 `t_mission.data`。领取成功按 `RewardLevel` 调用 `AddLevel`。
-- **Store**：进程里一份。`Open` 装上后，actor 用 `store.Get()` 取，不要在服务里再存一份地址。`HasRole`/`CreateRole`/`LoadRole`/`SaveRole`/`LoadMission`/`SaveMission`，以及好友边和申请。连接走 `gonet/mysql`，表结构仍在本包。不是 actor。login 无号则 CreateRole。Dispatch 里不跑 SQL。
+- **Store**：进程里一份。`Open` 装上后，actor 用 `store.Get()` 取，不要在服务里再存一份地址。`HasRole`/`CreateRole`/`LoadRole`/`SaveRole`/`LoadMission`/`SaveMission`，以及好友边和申请。一次要改多张表的写进 `gonet/mysql` 的事务：建会（公会行 + 会长）、同意入会（成员 + 删申请）、解散（申请、成员、公会）、同意好友（双向边 + 删申请）、玩家存档（`role` + `t_mission`）。单条 SQL 已经覆盖的，例如一次插入两条好友边，不再包事务。连接走 `gonet/mysql`，表结构仍在本包。不是 actor。login 无号则 CreateRole。Dispatch 里不跑 SQL。
 
 partys / heros：**未实现**。应挂在 `role.Data` 上，不要单独 actor。
 
@@ -259,13 +262,14 @@ go run ./cmd/debugclient              # monitor / kill <pid>
 5. 玩家模块数据挂在 role 上，不要为 mission/hero 再 Spawn 一个 actor。
 6. watchdog 不长期读业务包；login 之后 conn 只属于对应 role。
 7. 不要把玩法写进 `gonet/`。
-8. 等人的房间只放在 `.match_<nodeid>` 里。`room/<id>` 只在开场后存在，不拿 `net.Conn`。
+8. 等人的房间只放在匹配目录里。`room/<id>` 只在开场后存在，不拿 `net.Conn`。目录的别名按第 9 条，应是 `.match`。
+9. 别名带不带节点号，看这个服务是不是每个节点都有一份。每个节点都有的，用 `.名字_<nodeid>`，例如 harbor、launcher、onlinemgr、watchdog。全服只有一个 actor 的，用 `.名字`，不加 nodeid，例如 `.friend`、`.guildmgr`、`.match`、`.idgen`，以后的 `.chat` 也一样。`.idgen` 只在 center 上创建。`role/<roleid>`、`guild/<id>`、`room/<id>` 按实例起名，也不加 nodeid。调用方按这个全服别名去 Call，不要去叫 `.friend_<自己的节点号>`。
 
 ---
 
 ## 11. 空房间
 
-`.match_<nodeid>` 一直在。创建、加入、离开、是否人满都在它的 mailbox 里。一场还没开场时只是一条内存记录：房间号、模式、人数上限、座位。一个人同时只在一个房间。人数上限 1 到 8。进程停了，这些记录就没了，不进 MySQL。
+`.match` 一直在。创建、加入、离开、是否人满都在它的 mailbox 里。一场还没开场时只是一条内存记录：房间号、模式、人数上限、座位。一个人同时只在一个房间。人数上限 1 到 8。进程停了，这些记录就没了，不进 MySQL。
 
 人满并且有人 `roomstart` 之后，目录才用 launcher 拉起 `room/<房间号>`。房间号从创建起不变。场景把座位抄进去，不接受新的加入。场景里没有蛇，也没有帧。在座的人 `roomsettle` 后，场景通知各个 `role`，目录忘掉这场，然后场景 `Exit`。目录和两边的 `role` 还在。
 

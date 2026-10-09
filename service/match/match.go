@@ -12,8 +12,8 @@ import (
 
 const spawnTimeout = 5 * time.Second
 
-// Name 是本进程房间目录的别名。Bind 之前为空。
-var Name string
+// Name 是全服房间目录的别名。全服只有一个，不加 nodeid。
+const Name = ".match"
 
 // node 是本进程的 nodeid，用来给房间号加前缀。
 var node uint64
@@ -21,10 +21,9 @@ var node uint64
 // SpawnRoom 由 service/room 在 init 时装上。目录只在开场时拉起场景，场景结束再通知目录。两边不能互相引用。
 var SpawnRoom func(id string, mode, capacity int, seats []string) gonet.ActorContextInterface
 
-// Bind 按 harbor 分配的 nodeid 确定房间目录别名。
+// Bind 记下本进程 nodeid，只用于房间号前缀。目录别名是全服的 Name。
 func Bind(nodeID uint64) {
 	node = nodeID
-	Name = gonet.ServiceAlias("match", nodeID)
 }
 
 type record struct {

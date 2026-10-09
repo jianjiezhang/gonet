@@ -26,16 +26,11 @@ const (
 	rankLeader = 1
 )
 
-// Name 是本进程公会目录的别名。Bind 之前为空。
-var Name string
+// Name 是全服公会目录的别名。全服只有一个，不加 nodeid。
+const Name = ".guildmgr"
 
 // SpawnGuild 由 service/guild 在 init 时装上。目录拉起公会 actor，公会 actor 再 Call 目录，两边不能互相引用。
 var SpawnGuild func() gonet.ActorContextInterface
-
-// Bind 按 harbor 分配的 nodeid 确定公会目录别名。
-func Bind(nodeID uint64) {
-	Name = gonet.ServiceAlias("guildmgr", nodeID)
-}
 
 func guildAlias(id string) string {
 	if id == "" {

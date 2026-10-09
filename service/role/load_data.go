@@ -58,11 +58,7 @@ func LoadData(alias string) (*Data, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
-	row, err := db.LoadRole(ctx, alias)
-	if err != nil {
-		return nil, err
-	}
-	blob, err := db.LoadMission(ctx, alias)
+	row, blob, err := db.LoadPlayer(ctx, alias)
 	if err != nil {
 		return nil, err
 	}
@@ -79,16 +75,6 @@ func SaveRole(row store.RoleRow) error {
 	return db.SaveRole(ctx, row)
 }
 
-func saveRoleTimeout(d time.Duration, row store.RoleRow) error {
-	db, err := useStore()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), d)
-	defer cancel()
-	return db.SaveRole(ctx, row)
-}
-
 func SaveMission(blob store.MissionBlob) error {
 	db, err := useStore()
 	if err != nil {
@@ -99,14 +85,24 @@ func SaveMission(blob store.MissionBlob) error {
 	return db.SaveMission(ctx, blob)
 }
 
-func saveMissionTimeout(d time.Duration, blob store.MissionBlob) error {
+func SavePlayer(row store.RoleRow, blob store.MissionBlob) error {
+	db, err := useStore()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	return db.SavePlayer(ctx, row, blob)
+}
+
+func savePlayerTimeout(d time.Duration, row store.RoleRow, blob store.MissionBlob) error {
 	db, err := useStore()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
-	return db.SaveMission(ctx, blob)
+	return db.SavePlayer(ctx, row, blob)
 }
 
 func dataFromStore(row store.RoleRow, blob store.MissionBlob) (*Data, error) {

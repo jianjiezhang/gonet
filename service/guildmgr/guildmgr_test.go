@@ -135,7 +135,6 @@ func TestGuildReload(t *testing.T) {
 func start(t *testing.T, ctx context.Context) uint64 {
 	t.Helper()
 	launcher.Bind(1)
-	guildmgr.Bind(1)
 	pid, err := gonet.SpawnNamed(launcher.New(), launcher.Name)
 	if err != nil {
 		t.Fatal(err)

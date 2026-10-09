@@ -15,13 +15,8 @@ import (
 
 const dbTimeout = 5 * time.Second
 
-// Name 是本进程好友服务的别名。Bind 之前为空。
-var Name string
-
-// Bind 按 harbor 分配的 nodeid 确定本进程的好友服务别名。
-func Bind(nodeID uint64) {
-	Name = gonet.ServiceAlias("friend", nodeID)
-}
+// Name 是全服好友服务的别名。全服只有一个，不加 nodeid。
+const Name = ".friend"
 
 var errNoStore = errors.New("friend: store 未初始化")
 
@@ -217,10 +212,7 @@ func (a *Actor) agree(self, from string) error {
 		if db == nil {
 			return errNoStore
 		}
-		if err := db.AddFriends(ctx, self, from); err != nil {
-			return err
-		}
-		return db.RemoveFriendRequest(ctx, from, self)
+		return db.AcceptFriend(ctx, self, from)
 	})
 	return nil
 }

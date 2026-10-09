@@ -14,7 +14,6 @@ func TestApplyAgreeDelete(t *testing.T) {
 	mem := store.NewMemory()
 	store.Set(mem)
 	t.Cleanup(func() { store.Set(nil) })
-	Bind(1)
 	pid, err := gonet.SpawnNamed(New(), Name)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +71,6 @@ func TestRejectAndCap(t *testing.T) {
 	old := friendLimit
 	friendLimit = 1
 	t.Cleanup(func() { friendLimit = old })
-	Bind(1)
 	pid, err := gonet.SpawnNamed(New(), Name)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +108,6 @@ func TestReload(t *testing.T) {
 	mem := store.NewMemory()
 	store.Set(mem)
 	t.Cleanup(func() { store.Set(nil) })
-	Bind(1)
 	defer gonet.Stop()
 	pid, err := gonet.SpawnNamed(New(), Name)
 	if err != nil {

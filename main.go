@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"game/config"
 	"game/service/friend"
 	"game/service/guildmgr"
+	"game/service/idgen"
 	"game/service/match"
 	"game/service/onlinemgr"
 	"game/service/watchdog"
@@ -69,8 +71,6 @@ func main() {
 	gonet.SetClusterNode(nodeID)
 	launcher.Bind(nodeID)
 	onlinemgr.Bind(nodeID)
-	friend.Bind(nodeID)
-	guildmgr.Bind(nodeID)
 	match.Bind(nodeID)
 	watchdog.Bind(nodeID)
 
@@ -104,6 +104,14 @@ func main() {
 
 	svcCtx, svcCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer svcCancel()
+	var idgenPID uint64
+	if cfg.Center {
+		idgen.UseSeq(redisIDSeq{rd: rd})
+		idgenPID, err = launcher.WaitService(svcCtx, idgen.New(), idgen.Name)
+		if err != nil {
+			fail("new idgen", err)
+		}
+	}
 	onlinePID, err := launcher.WaitService(svcCtx, onlinemgr.New(), onlinemgr.Name)
 	if err != nil {
 		fail("new onlinemgr", err)
@@ -169,6 +177,11 @@ func main() {
 	if err := gonet.StopActor(guildPID); err != nil {
 		slog.Error("stop guildmgr", "err", err)
 	}
+	if idgenPID != 0 {
+		if err := gonet.StopActor(idgenPID); err != nil {
+			slog.Error("stop idgen", "err", err)
+		}
+	}
 	if err := gonet.StopActor(onlinePID); err != nil {
 		slog.Error("stop onlinemgr", "err", err)
 	}
@@ -182,6 +195,7 @@ func main() {
 const (
 	harbormgrKey     = "harbormgr:addr"
 	harbormgrNextKey = "harbormgr:nextnode"
+	idgenStateKey    = "idgen:state"
 )
 
 // redisNodeSeq 把已经发出的最大 nodeid 放在 Redis，harbormgr 重启后新节点不会领到旧编号。
@@ -202,6 +216,34 @@ func (s redisNodeSeq) Load(ctx context.Context) (uint64, error) {
 
 func (s redisNodeSeq) Save(ctx context.Context, nodeID uint64) error {
 	return s.rd.Set(ctx, harbormgrNextKey, strconv.FormatUint(nodeID, 10), 0)
+}
+
+// redisIDSeq 把每种编号已经发出的最大值放在 Redis。idgen 重启后不会把旧号再发一遍。
+type redisIDSeq struct {
+	rd *redis.Client
+}
+
+func (s redisIDSeq) Load(ctx context.Context) (map[string]uint64, error) {
+	v, err := s.rd.Get(ctx, idgenStateKey)
+	if errors.Is(err, redis.ErrNil) {
+		return map[string]uint64{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]uint64{}
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s redisIDSeq) Save(ctx context.Context, counters map[string]uint64) error {
+	b, err := json.Marshal(counters)
+	if err != nil {
+		return err
+	}
+	return s.rd.Set(ctx, idgenStateKey, string(b), 0)
 }
 
 // startCluster 按本机地址和配置端口拉起 harbor。center 节点先启动 harbormgr，并把监听地址写入 Redis。

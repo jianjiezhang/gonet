@@ -45,75 +45,85 @@ func (s *mysqlStore) LoadGuild(ctx context.Context, id string) (GuildRow, []Guil
 		return GuildRow{}, nil, nil, ErrEmptyAlias
 	}
 	var row GuildRow
-	q, err := s.db.QueryRow(ctx, `SELECT id, name, leader, notice, created FROM guild WHERE id = ?`, id)
-	if err != nil {
-		return GuildRow{}, nil, nil, err
-	}
-	err = q.Scan(&row.ID, &row.Name, &row.Leader, &row.Notice, &row.Created)
-	if mysql.IsNoRows(err) {
-		return GuildRow{}, nil, nil, ErrNotFound
-	}
-	if err != nil {
-		return GuildRow{}, nil, nil, err
-	}
-	mrows, err := s.db.Query(ctx, "SELECT roleid, guildid, `rank`, time FROM guild_member WHERE guildid = ?", id)
-	if err != nil {
-		return GuildRow{}, nil, nil, err
-	}
-	defer mrows.Close()
 	var members []GuildMember
-	for mrows.Next() {
-		var m GuildMember
-		if err := mrows.Scan(&m.RoleID, &m.GuildID, &m.Rank, &m.Time); err != nil {
-			return GuildRow{}, nil, nil, err
+	var applies []GuildApply
+	err := s.db.Within(ctx, func(tx *mysql.Tx) error {
+		q, err := tx.QueryRow(ctx, `SELECT id, name, leader, notice, created FROM guild WHERE id = ?`, id)
+		if err != nil {
+			return err
 		}
-		members = append(members, m)
-	}
-	if err := mrows.Err(); err != nil {
-		return GuildRow{}, nil, nil, err
-	}
-	arows, err := s.db.Query(ctx, `SELECT guildid, roleid, time FROM guild_apply WHERE guildid = ?`, id)
+		err = q.Scan(&row.ID, &row.Name, &row.Leader, &row.Notice, &row.Created)
+		if mysql.IsNoRows(err) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		mrows, err := tx.Query(ctx, "SELECT roleid, guildid, `rank`, time FROM guild_member WHERE guildid = ?", id)
+		if err != nil {
+			return err
+		}
+		defer mrows.Close()
+		for mrows.Next() {
+			var m GuildMember
+			if err := mrows.Scan(&m.RoleID, &m.GuildID, &m.Rank, &m.Time); err != nil {
+				return err
+			}
+			members = append(members, m)
+		}
+		if err := mrows.Err(); err != nil {
+			return err
+		}
+		arows, err := tx.Query(ctx, `SELECT guildid, roleid, time FROM guild_apply WHERE guildid = ?`, id)
+		if err != nil {
+			return err
+		}
+		defer arows.Close()
+		for arows.Next() {
+			var a GuildApply
+			if err := arows.Scan(&a.GuildID, &a.RoleID, &a.Time); err != nil {
+				return err
+			}
+			applies = append(applies, a)
+		}
+		return arows.Err()
+	})
 	if err != nil {
 		return GuildRow{}, nil, nil, err
 	}
-	defer arows.Close()
-	var applies []GuildApply
-	for arows.Next() {
-		var a GuildApply
-		if err := arows.Scan(&a.GuildID, &a.RoleID, &a.Time); err != nil {
-			return GuildRow{}, nil, nil, err
-		}
-		applies = append(applies, a)
-	}
-	return row, members, applies, arows.Err()
+	return row, members, applies, nil
 }
 
 func (s *mysqlStore) CreateGuild(ctx context.Context, row GuildRow, leader GuildMember) error {
 	if row.ID == "" || row.Name == "" || leader.RoleID == "" {
 		return ErrEmptyAlias
 	}
-	if _, err := s.db.Exec(ctx,
-		`INSERT INTO guild (id, name, leader, notice, created) VALUES (?, ?, ?, ?, ?)`,
-		row.ID, row.Name, row.Leader, row.Notice, row.Created); err != nil {
+	return s.db.Within(ctx, func(tx *mysql.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO guild (id, name, leader, notice, created) VALUES (?, ?, ?, ?, ?)`,
+			row.ID, row.Name, row.Leader, row.Notice, row.Created); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			"INSERT INTO guild_member (roleid, guildid, `rank`, time) VALUES (?, ?, ?, ?)",
+			leader.RoleID, leader.GuildID, leader.Rank, leader.Time)
 		return err
-	}
-	if _, err := s.db.Exec(ctx,
-		"INSERT INTO guild_member (roleid, guildid, `rank`, time) VALUES (?, ?, ?, ?)",
-		leader.RoleID, leader.GuildID, leader.Rank, leader.Time); err != nil {
-		_, _ = s.db.Exec(ctx, `DELETE FROM guild WHERE id = ?`, row.ID)
-		return err
-	}
-	return nil
+	})
 }
 
 func (s *mysqlStore) AddGuildMember(ctx context.Context, m GuildMember) error {
 	if m.RoleID == "" || m.GuildID == "" {
 		return ErrEmptyAlias
 	}
-	_, err := s.db.Exec(ctx,
-		"INSERT INTO guild_member (roleid, guildid, `rank`, time) VALUES (?, ?, ?, ?)",
-		m.RoleID, m.GuildID, m.Rank, m.Time)
-	return err
+	return s.db.Within(ctx, func(tx *mysql.Tx) error {
+		if _, err := tx.Exec(ctx,
+			"INSERT INTO guild_member (roleid, guildid, `rank`, time) VALUES (?, ?, ?, ?)",
+			m.RoleID, m.GuildID, m.Rank, m.Time); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM guild_apply WHERE guildid = ? AND roleid = ?`, m.GuildID, m.RoleID)
+		return err
+	})
 }
 
 func (s *mysqlStore) RemoveGuildMember(ctx context.Context, roleID string) error {
@@ -147,14 +157,16 @@ func (s *mysqlStore) DeleteGuild(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrEmptyAlias
 	}
-	if _, err := s.db.Exec(ctx, `DELETE FROM guild_apply WHERE guildid = ?`, id); err != nil {
+	return s.db.Within(ctx, func(tx *mysql.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM guild_apply WHERE guildid = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM guild_member WHERE guildid = ?`, id); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM guild WHERE id = ?`, id)
 		return err
-	}
-	if _, err := s.db.Exec(ctx, `DELETE FROM guild_member WHERE guildid = ?`, id); err != nil {
-		return err
-	}
-	_, err := s.db.Exec(ctx, `DELETE FROM guild WHERE id = ?`, id)
-	return err
+	})
 }
 
 func (m *Memory) LoadGuilds(_ context.Context) ([]GuildRow, error) {
@@ -235,6 +247,10 @@ func (m *Memory) AddGuildMember(_ context.Context, member GuildMember) error {
 		return ErrExists
 	}
 	m.members[member.RoleID] = member
+	delete(m.applies[member.GuildID], member.RoleID)
+	if len(m.applies[member.GuildID]) == 0 {
+		delete(m.applies, member.GuildID)
+	}
 	return nil
 }
 
