@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,24 @@ type logBind struct {
 }
 
 var logBinds sync.Map // goid → logBind
+
+func goid() uint64 {
+	var buf [32]byte
+	n := runtime.Stack(buf[:], false)
+	const p = "goroutine "
+	if n < len(p)+1 {
+		return 0
+	}
+	var id uint64
+	for i := len(p); i < n; i++ {
+		c := buf[i]
+		if c < '0' || c > '9' {
+			return id
+		}
+		id = id*10 + uint64(c-'0')
+	}
+	return id
+}
 
 func bindLogPID(pid uint64) func() {
 	id := goid()

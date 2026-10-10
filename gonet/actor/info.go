@@ -34,22 +34,22 @@ func Infos() []Info {
 	all := actorRegistry.list()
 	out := make([]Info, 0, len(all))
 	for _, a := range all {
-		cmd, _ := a.lastCmd.Load().(string)
+		cmd, _ := a.obs.lastCmd.Load().(string)
 		out = append(out, Info{
 			PID:          a.pid,
 			Alias:        actorRegistry.aliasOf(a.pid),
 			Mailbox:      len(a.mailbox),
 			MailboxCap:   cap(a.mailbox),
-			MailboxHigh:  int(a.mailboxHigh.Load()),
-			Status:       int(a.status.Load()),
-			PendingCalls: a.pendingCount(),
-			SendFull:     a.sendFull.Load(),
-			SendDead:     a.sendDead.Load(),
-			CallTimeouts: a.callTimeouts.Load(),
-			SlowDispatch: a.slowDispatch.Load(),
-			ReplyFail:    a.replyFail.Load(),
+			MailboxHigh:  int(a.obs.mailboxHigh.Load()),
+			Status:       int(a.life.status.Load()),
+			PendingCalls: a.calls.count(),
+			SendFull:     a.obs.sendFull.Load(),
+			SendDead:     a.obs.sendDead.Load(),
+			CallTimeouts: a.obs.callTimeouts.Load(),
+			SlowDispatch: a.obs.slowDispatch.Load(),
+			ReplyFail:    a.obs.replyFail.Load(),
 			LastCmd:      cmd,
-			LastDispatch: time.Duration(a.lastDispatch.Load()),
+			LastDispatch: time.Duration(a.obs.lastDispatch.Load()),
 		})
 	}
 	return out

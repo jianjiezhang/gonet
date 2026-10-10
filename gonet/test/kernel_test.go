@@ -289,18 +289,17 @@ func TestFromPeer(t *testing.T) {
 	}
 }
 
-func TestSuspendCallSelf(t *testing.T) {
+func TestCallSelf(t *testing.T) {
 	pid := mustSpawn(t, &echoActor{})
 	defer gonet.StopActor(pid)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	v, err := gonet.SuspendCallMemory(ctx, pid, suspendSelfMsg{})
+	v, err := gonet.SuspendCallMemory(ctx, pid, callSelfMsg{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok := v.(error)
-	if !ok || !errors.Is(got, gonet.ErrSuspendSelf) {
-		t.Fatalf("got %v (%T)", v, v)
+	if v != "pong" {
+		t.Fatalf("got %v", v)
 	}
 }
 

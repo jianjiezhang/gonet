@@ -89,7 +89,7 @@ RPC 成败只看 `CallResponse`，不要看 `Call` 的 `error`。
 
 超时 **不会撤回** 对方队列里的请求；晚到的 `Reply` 丢掉。「超时 ≠ 没执行」，重试必须幂等。
 
-`SuspendCall` 阻塞当前协程。不要在 `Dispatch` 里用。在自身 mailbox 协程上 `SuspendCall` 自己会立刻返回 `ErrSuspendSelf`（否则死锁）。
+`SuspendCall` 阻塞当前协程，只给邮箱外面的协程用。邮箱协程里用异步 `Call`，对自己也一样。
 
 ## Monitor 指标
 

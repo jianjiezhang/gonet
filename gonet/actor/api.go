@@ -55,21 +55,21 @@ func SendStats() (full, dead uint64) {
 func noteSendDead(a *actor) {
 	sendDead.Add(1)
 	if a != nil {
-		a.sendDead.Add(1)
+		a.obs.sendDead.Add(1)
 	}
 }
 
 func noteSendFull(a *actor) {
 	sendFull.Add(1)
 	if a != nil {
-		a.sendFull.Add(1)
+		a.obs.sendFull.Add(1)
 	}
 }
 
 func noteCallTimeout(a *actor) {
 	callTimeouts.Add(1)
 	if a != nil {
-		a.callTimeouts.Add(1)
+		a.obs.callTimeouts.Add(1)
 	}
 }
 
@@ -78,7 +78,7 @@ func noteSlowDispatch() { slowDispatch.Add(1) }
 func noteReplyFail(a *actor) {
 	replyFail.Add(1)
 	if a != nil {
-		a.replyFail.Add(1)
+		a.obs.replyFail.Add(1)
 	}
 }
 
@@ -130,19 +130,16 @@ func spawn(impl ActorContextInterface, opt SpawnOptions) (uint64, uint64, error)
 		size = defaultMailboxSize
 	}
 	a := &actor{
-		impl:     impl,
-		mailbox:  make(chan Envelope, size),
-		quit:     make(chan struct{}),
-		done:     make(chan struct{}),
-		initWait: make(chan struct{}),
+		impl:    impl,
+		mailbox: make(chan Envelope, size),
+		life:    newLifecycle(),
 	}
-	a.status.Store(statusStarting)
 	if err := actorRegistry.add(a, opt.Name); err != nil {
 		return 0, 0, err
 	}
 	if err := publishName(opt.Name); err != nil {
 		actorRegistry.remove(a.pid)
-		close(a.done)
+		close(a.life.done)
 		return 0, 0, err
 	}
 	a.impl.attach(a)
@@ -155,7 +152,7 @@ func spawn(impl ActorContextInterface, opt SpawnOptions) (uint64, uint64, error)
 		caller := actorRegistry.get(opt.InitFrom)
 		if caller == nil {
 			actorRegistry.remove(a.pid)
-			close(a.done)
+			close(a.life.done)
 			return 0, 0, ErrDead
 		}
 		initSession = nextCallSession.Add(1)
@@ -167,11 +164,11 @@ func spawn(impl ActorContextInterface, opt SpawnOptions) (uint64, uint64, error)
 			tid, err = scheduleTimeout(opt.InitFrom, opt.InitTimeout, timeoutMsg)
 			if err != nil {
 				actorRegistry.remove(a.pid)
-				close(a.done)
+				close(a.life.done)
 				return 0, 0, err
 			}
 		}
-		caller.trackCall(initSession, tid)
+		caller.calls.track(initSession, tid)
 		env.From = opt.InitFrom
 		env.session = initSession
 	}
@@ -179,11 +176,11 @@ func spawn(impl ActorContextInterface, opt SpawnOptions) (uint64, uint64, error)
 	if err := a.post(env); err != nil {
 		if initSession != 0 {
 			if caller := actorRegistry.get(opt.InitFrom); caller != nil {
-				caller.takeCall(initSession)
+				caller.calls.take(initSession)
 			}
 		}
 		actorRegistry.remove(a.pid)
-		close(a.done)
+		close(a.life.done)
 		return 0, 0, err
 	}
 	go a.run()
@@ -240,13 +237,13 @@ func StopActorWait(pid uint64, d time.Duration) error {
 	if a == nil {
 		return ErrDead
 	}
-	a.requestStop()
+	a.life.requestStop()
 	if d <= 0 {
-		<-a.done
+		<-a.life.done
 		return nil
 	}
 	select {
-	case <-a.done:
+	case <-a.life.done:
 		return nil
 	case <-time.After(d):
 		return ErrStopTimeout
@@ -258,7 +255,7 @@ func Kill(pid uint64) error {
 	if a == nil {
 		return ErrDead
 	}
-	a.requestStop()
+	a.life.requestStop()
 	return nil
 }
 
@@ -468,11 +465,11 @@ func Stop() {
 func StopWait(d time.Duration) []uint64 {
 	all := actorRegistry.list()
 	for _, a := range all {
-		a.requestStop()
+		a.life.requestStop()
 	}
 	if d <= 0 {
 		for _, a := range all {
-			<-a.done
+			<-a.life.done
 		}
 		return nil
 	}
@@ -482,19 +479,19 @@ func StopWait(d time.Duration) []uint64 {
 	for i, a := range all {
 		if len(stuck) > 0 {
 			select {
-			case <-a.done:
+			case <-a.life.done:
 			default:
 				stuck = append(stuck, a.pid)
 			}
 			continue
 		}
 		select {
-		case <-a.done:
+		case <-a.life.done:
 		case <-timer.C:
 			stuck = append(stuck, a.pid)
 			for _, b := range all[i+1:] {
 				select {
-				case <-b.done:
+				case <-b.life.done:
 				default:
 					stuck = append(stuck, b.pid)
 				}

@@ -113,7 +113,7 @@ launcher.WaitService(ctx, impl, serviceName)                       // 阻塞；�
 - 一个 actor 一个 mailbox，**Dispatch 里禁止 Accept/Read/堵网**。
 - mailbox 协程上的 info、warn、error 前面带这个 actor 的别名，例如 `[role/39000001]`。玩家协议写出前再加 `[send]`，读入后加 `[recv]`，后面是命令和 JSON。readLoop 和等登录不在 mailbox 上，进入时带上同一个别名。
 - `Spawn` 立刻返回；Init 是 mailbox 第一条系统消息。`starting` 时只收 init，其它投递得 `ErrNotReady`。就绪用 `WaitInit` 或 `SpawnAsync(InitFrom)`；`InitTimeout<=0` 只等 Init，不超时失败。
-- `Send`/`Call` 走 pid；`SendName`/`CallName` 走别名。入队前把业务消息编成 JSON（`*BaseMessage`），`Dispatch` 再按 cmd `Unpack`。`Call` 是异步的，回复走 `.response`（回复值仍是原来的 Go 值）。`d<=0` 不排超时。Dispatch 里禁止 `SuspendCall`；对自己会立刻 `ErrSuspendSelf`。
+- `Send`/`Call` 走 pid；`SendName`/`CallName` 走别名。入队前把业务消息编成 JSON（`*BaseMessage`），`Dispatch` 再按 cmd `Unpack`。`Call` 是异步的，回复走 `.response`（回复值仍是原来的 Go 值）。`d<=0` 不排超时。Dispatch 里用异步 `Call`，不要 `SuspendCall`。
 - `SendMemory`/`SendMemoryName`（以及 `CallMemory`）不编码，原指针只在本进程传递。`Conn`、创建 actor 的 `Impl` 走这条。`.` 开头的内核消息（`.init`、`.response`、`.call.timeout`）也不进 JSON。
 - 停机可用 `StopActorWait` / `StopWait` 带超时。
 - `Monitor` 含每 actor 的 mailbox high、投递失败与 Call 超时计数。

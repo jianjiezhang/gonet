@@ -48,7 +48,6 @@ var (
 	ErrNoCaller      = actor.ErrNoCaller
 	ErrRemoteCaller  = actor.ErrRemoteCaller
 	ErrCallTimeout   = actor.ErrCallTimeout
-	ErrSuspendSelf   = actor.ErrSuspendSelf
 	ErrDispatchPanic = actor.ErrDispatchPanic
 	ErrStopTimeout   = actor.ErrStopTimeout
 	ErrSystemCmd     = actor.ErrSystemCmd

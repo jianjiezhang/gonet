@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,29 +24,84 @@ const (
 
 // actor 是内核里一个 Actor 的运行记录。
 type actor struct {
-	pid          uint64
-	alias        string // 仅在 registry 锁内读写
-	impl         ActorContextInterface
-	mailbox      chan Envelope
-	quit         chan struct{}
-	done         chan struct{}
-	status       atomic.Int32
-	stopOnce     sync.Once
+	//身份+主要结构
+	pid     uint64
+	alias   string // 仅在 registry 锁内读写
+	impl    ActorContextInterface
+	mailbox chan Envelope
+
+	life  lifecycle   // 生命周期管理
+	calls callSet     // 未完成的Call mu + session 表
+	obs   observation // 监控相关+性能指标
+}
+
+// lifecycle 管停机信号、状态和 Init 完成。
+type lifecycle struct {
+	quit     chan struct{}
+	done     chan struct{}
+	status   atomic.Int32
+	stopOnce sync.Once
+	initWait chan struct{} // Init 结束后 close，等待一个actor执行第一条消息：initmsg
+	initErr  error         // Init 结果；仅在 initWait 关闭后读
+	initOnce sync.Once
+}
+
+func newLifecycle() lifecycle {
+	l := lifecycle{
+		quit:     make(chan struct{}),
+		done:     make(chan struct{}),
+		initWait: make(chan struct{}),
+	}
+	l.status.Store(statusStarting)
+	return l
+}
+
+func (l *lifecycle) signalInit(err error) {
+	l.initOnce.Do(func() {
+		l.initErr = err
+		close(l.initWait)
+	})
+}
+
+func (l *lifecycle) requestStop() {
+	l.stopOnce.Do(func() {
+		close(l.quit)
+	})
+}
+
+// observation 是单个 actor 的监控计数。
+type observation struct {
 	lastCmd      atomic.Value // string
 	lastDispatch atomic.Int64
-	pendingMu    sync.Mutex
-	pending      map[uint64]uint64 // session → timer id
-	initWait     chan struct{}     // Init 结束后 close
-	initErr      error             // Init 结果；仅在 initWait 关闭后读
-	initOnce     sync.Once
-	loopID       atomic.Uint64 // mailbox 协程的 goid；SuspendCall 自己用
-
 	sendFull     atomic.Uint64
 	sendDead     atomic.Uint64
 	callTimeouts atomic.Uint64
 	mailboxHigh  atomic.Uint64
 	slowDispatch atomic.Uint64
 	replyFail    atomic.Uint64
+}
+
+func (o *observation) noteDispatch(cmd string, d time.Duration) {
+	o.lastDispatch.Store(int64(d))
+	if cmd != "" {
+		o.lastCmd.Store(cmd)
+	}
+	if d >= SlowDispatchThreshold {
+		o.slowDispatch.Add(1)
+		noteSlowDispatch()
+	}
+}
+
+func (o *observation) noteMailbox(n uint64) {
+	for {
+		old := o.mailboxHigh.Load()
+		if n <= old {
+			return
+		}
+		if o.mailboxHigh.CompareAndSwap(old, n) {
+			return
+		}
+	}
 }
 
 // Envelope 是本进程 mailbox 里的一条消息，不是网上的包。
@@ -106,50 +160,35 @@ func (a *actor) runInit() (err error) {
 	return a.impl.Init()
 }
 
-func (a *actor) signalInit(err error) {
-	a.initOnce.Do(func() {
-		a.initErr = err
-		close(a.initWait)
-	})
-}
-
 func (a *actor) handleInit(e Envelope) {
-	if a.status.Load() != statusStarting {
+	if a.life.status.Load() != statusStarting {
 		failEnvelopeCall(e, ErrNotReady)
 		return
 	}
 	err := a.runInit()
 	if err != nil {
-		a.signalInit(err)
+		a.life.signalInit(err)
 		failEnvelopeCall(e, err)
 		a.abort()
 		return
 	}
-	select {
-	case <-a.quit:
-		a.signalInit(ErrDead)
-		failEnvelopeCall(e, ErrDead)
-		a.abort()
-		return
-	default:
-	}
-	a.status.Store(statusRunning)
-	a.signalInit(nil)
+	a.life.status.Store(statusRunning)
+	a.life.signalInit(nil)
 	if e.isCall() {
 		e.Reply(a.pid)
 	}
 }
 
 func (a *actor) abort() {
-	if a.status.Load() == statusDead {
+	if a.life.status.Load() == statusDead {
 		return
 	}
-	starting := a.status.Load() == statusStarting
-	a.status.Store(statusDead)
-	a.requestStop()
+	starting := a.life.status.Load() == statusStarting
+	a.life.status.Store(statusDead)
+	a.life.requestStop()
 	a.rejectMailboxCalls()
 	if starting {
-		a.signalInit(ErrDead)
+		a.life.signalInit(ErrDead)
 	}
 	if a.impl != nil {
 		func() {
@@ -158,25 +197,19 @@ func (a *actor) abort() {
 		}()
 	}
 	actorRegistry.remove(a.pid)
-	close(a.done)
-}
-
-func (a *actor) requestStop() {
-	a.stopOnce.Do(func() {
-		close(a.quit)
-	})
+	close(a.life.done)
 }
 
 func (a *actor) term() {
-	if a.status.Load() == statusDead {
+	if a.life.status.Load() == statusDead {
 		return
 	}
-	starting := a.status.Load() == statusStarting
-	a.status.Store(statusStopping)
-	a.requestStop()
+	starting := a.life.status.Load() == statusStarting
+	a.life.status.Store(statusStopping)
+	a.life.requestStop()
 	a.rejectMailboxCalls()
 	if starting {
-		a.signalInit(ErrDead)
+		a.life.signalInit(ErrDead)
 	}
 	if a.impl != nil {
 		func() {
@@ -184,16 +217,22 @@ func (a *actor) term() {
 			a.impl.Term()
 		}()
 	}
-	a.status.Store(statusDead)
+	a.life.status.Store(statusDead)
 	actorRegistry.remove(a.pid)
-	close(a.done)
+	close(a.life.done)
 }
 
 func (a *actor) recv() (e Envelope, ok bool) {
 	select {
+	case <-a.life.quit:
+		a.term()
+		return Envelope{}, false
+	default:
+	}
+	select {
 	case e = <-a.mailbox:
 		return e, true
-	case <-a.quit:
+	case <-a.life.quit:
 		a.term()
 		return Envelope{}, false
 	}
@@ -207,7 +246,7 @@ func (a *actor) dispatch(e Envelope) {
 
 func (a *actor) handle(e Envelope) {
 	e.Self = a.pid
-	if a.status.Load() == statusStarting {
+	if a.life.status.Load() == statusStarting {
 		if isInitMsg(e.Msg) {
 			a.handleInit(e)
 			return
@@ -221,15 +260,7 @@ func (a *actor) handle(e Envelope) {
 	cmd := messageCmd(e.Msg)
 	start := time.Now()
 	defer func() {
-		d := time.Since(start)
-		a.lastDispatch.Store(int64(d))
-		if cmd != "" {
-			a.lastCmd.Store(cmd)
-		}
-		if d >= SlowDispatchThreshold {
-			a.slowDispatch.Add(1)
-			noteSlowDispatch()
-		}
+		a.obs.noteDispatch(cmd, time.Since(start))
 		if r := recover(); r != nil {
 			slog.Error("gonet: dispatch panic", "pid", a.pid, "msg", e.Msg, "err", r)
 			failEnvelopeCall(e, ErrDispatchPanic)
@@ -253,16 +284,7 @@ func (e Envelope) isCall() bool {
 }
 
 func (a *actor) noteMailboxLen() {
-	n := uint64(len(a.mailbox))
-	for {
-		old := a.mailboxHigh.Load()
-		if n <= old {
-			return
-		}
-		if a.mailboxHigh.CompareAndSwap(old, n) {
-			return
-		}
-	}
+	a.obs.noteMailbox(uint64(len(a.mailbox)))
 }
 
 func (a *actor) post(env Envelope) error {
@@ -270,7 +292,7 @@ func (a *actor) post(env Envelope) error {
 		noteSendDead(nil)
 		return ErrDead
 	}
-	st := a.status.Load()
+	st := a.life.status.Load()
 	if st == statusDead {
 		noteSendDead(a)
 		return ErrDead
@@ -279,9 +301,9 @@ func (a *actor) post(env Envelope) error {
 		return ErrNotReady
 	}
 	select {
-	case <-a.quit:
+	case <-a.life.quit:
 		// 已请求停机但 Term 未完成：还在表里，不是 ErrDead。
-		if a.status.Load() == statusDead {
+		if a.life.status.Load() == statusDead {
 			noteSendDead(a)
 			return ErrDead
 		}
@@ -294,8 +316,8 @@ func (a *actor) post(env Envelope) error {
 		return nil
 	default:
 		select {
-		case <-a.quit:
-			if a.status.Load() == statusDead {
+		case <-a.life.quit:
+			if a.life.status.Load() == statusDead {
 				noteSendDead(a)
 				return ErrDead
 			}
@@ -308,8 +330,6 @@ func (a *actor) post(env Envelope) error {
 }
 
 func (a *actor) run() {
-	a.loopID.Store(goid())
-	defer a.loopID.Store(0)
 	defer bindLogPID(a.pid)()
 	for {
 		e, ok := a.recv()
@@ -318,31 +338,6 @@ func (a *actor) run() {
 		}
 		a.handle(e)
 	}
-}
-
-func goid() uint64 {
-	var buf [32]byte
-	n := runtime.Stack(buf[:], false)
-	const p = "goroutine "
-	if n < len(p)+1 {
-		return 0
-	}
-	var id uint64
-	for i := len(p); i < n; i++ {
-		c := buf[i]
-		if c < '0' || c > '9' {
-			return id
-		}
-		id = id*10 + uint64(c-'0')
-	}
-	return id
-}
-
-func (a *actor) pendingCount() int {
-	a.pendingMu.Lock()
-	n := len(a.pending)
-	a.pendingMu.Unlock()
-	return n
 }
 
 var (
@@ -362,14 +357,14 @@ func WaitInit(ctx context.Context, pid uint64) error {
 		return ErrDead
 	}
 	select {
-	case <-a.initWait:
-		return a.initErr
+	case <-a.life.initWait:
+		return a.life.initErr
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-a.done:
+	case <-a.life.done:
 		select {
-		case <-a.initWait:
-			return a.initErr
+		case <-a.life.initWait:
+			return a.life.initErr
 		default:
 			return ErrDead
 		}

@@ -1,7 +1,6 @@
 package gonet_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -46,7 +45,7 @@ type unregisterMsg struct{ gonet.BaseMessage }
 
 type exitMsg struct{ gonet.BaseMessage }
 
-type suspendSelfMsg struct{ gonet.BaseMessage }
+type callSelfMsg struct{ gonet.BaseMessage }
 
 type holdMsg struct {
 	gonet.BaseMessage
@@ -138,9 +137,13 @@ func (a *echoActor) Dispatch(e gonet.Envelope) {
 	case exitMsg:
 		e.Exit()
 		e.Reply("bye")
-	case suspendSelfMsg:
-		_, err := gonet.SuspendCallMemory(context.Background(), a.Self(), pingMsg{})
-		e.Reply(err)
+	case callSelfMsg:
+		env := e
+		a.peerReply = &env
+		if _, err := e.CallMemory(a.Self(), time.Second, pingMsg{}); err != nil {
+			a.peerReply = nil
+			e.Reply(err)
+		}
 	}
 }
 
