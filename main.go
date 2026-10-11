@@ -15,24 +15,34 @@ import (
 	"time"
 
 	"game/config"
-	"game/service/friend"
-	"game/service/guildmgr"
-	"game/service/idgen"
-	"game/service/match"
-	"game/service/onlinemgr"
-	"game/service/watchdog"
+	"game/services/friend"
+	"game/services/guild"
+	"game/services/guildmgr"
+	"game/services/idgen"
+	"game/services/match"
+	"game/services/onlinemgr"
+	"game/services/room"
+	"game/services/watchdog"
 	"game/store"
 	"game/web"
 
 	"gonet"
-	"gonet/redis"
+	"gonet/components/redis"
 	"gonet/services/harbor"
 	"gonet/services/harbormgr"
 	"gonet/services/launcher"
+	"gonet/services/monitor"
 )
 
+func init() {
+	guildmgr.SpawnGuild = func() gonet.ActorContextInterface { return guild.New() }
+	match.SpawnRoom = func(id string, mode, capacity int, seats []string) gonet.ActorContextInterface {
+		return room.New(id, mode, capacity, seats)
+	}
+}
+
 func main() {
-	configPath := flag.String("config", "config/config.toml", "配置文件路径")
+	configPath := flag.String("config", "conf/config.toml", "配置文件路径")
 	flag.Parse()
 	if err := config.Load(*configPath); err != nil {
 		slog.Error("load config", "path", *configPath, "err", err)
@@ -70,9 +80,15 @@ func main() {
 	stopCluster, nodeID := startCluster(cfg, rd, ip)
 	gonet.SetClusterNode(nodeID)
 	launcher.Bind(nodeID)
-	onlinemgr.Bind(nodeID)
-	match.Bind(nodeID)
-	watchdog.Bind(nodeID)
+	if cfg.Match {
+		match.Bind(nodeID)
+	}
+	if cfg.Role {
+		watchdog.Bind(nodeID)
+	}
+	if cfg.Center {
+		monitor.Bind(nodeID)
+	}
 
 	fail := func(msg string, err error) {
 		slog.Error(msg, "err", err)
@@ -94,61 +110,74 @@ func main() {
 	if err != nil {
 		fail("pack ping", err)
 	}
-	callCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	pong, err := gonet.SuspendCallName(callCtx, launcher.Name, ping)
+	pong, err := pingName(launcher.Name, ping)
 	if err != nil {
 		fail("call ping", err)
 	}
 	slog.Info("got reply", "pong", pong)
 
-	svcCtx, svcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer svcCancel()
-	var idgenPID uint64
-	if cfg.Center {
+	var idgenPID, onlinePID, friendPID, guildPID, matchPID, watchdogPID, monitorPID uint64
+	if cfg.Idgen {
 		idgen.UseSeq(redisIDSeq{rd: rd})
-		idgenPID, err = launcher.WaitService(svcCtx, idgen.New(), idgen.Name)
+		idgenPID, err = startService(idgen.New(), idgen.Name)
 		if err != nil {
 			fail("new idgen", err)
 		}
 	}
-	onlinePID, err := launcher.WaitService(svcCtx, onlinemgr.New(), onlinemgr.Name)
-	if err != nil {
-		fail("new onlinemgr", err)
-	}
-	friendPID, err := launcher.WaitService(svcCtx, friend.New(), friend.Name)
-	if err != nil {
-		fail("new friend", err)
-	}
-	guildPID, err := launcher.WaitService(svcCtx, guildmgr.New(), guildmgr.Name)
-	if err != nil {
-		fail("new guildmgr", err)
-	}
-	matchPID, err := launcher.WaitService(svcCtx, match.New(), match.Name)
-	if err != nil {
-		fail("new match", err)
-	}
-
-	watchdogPID, err := launcher.WaitService(svcCtx, watchdog.New(), watchdog.Name)
-	if err != nil {
-		fail("new watchdog", err)
-	}
-	watchdogPong, err := gonet.SuspendCallName(callCtx, watchdog.Name, ping)
-	if err != nil {
-		fail("call watchdog ping", err)
-	}
-	slog.Info("got watchdog reply", "pong", watchdogPong)
-
-	if dbg := cfg.DebugAddr(); dbg != "" {
-		bound, err := gonet.ListenDebug(dbg)
+	if cfg.Onlinemgr {
+		onlinePID, err = startService(onlinemgr.New(), onlinemgr.Name)
 		if err != nil {
-			fail("listen debug", err)
+			fail("new onlinemgr", err)
 		}
-		defer gonet.StopDebug()
-		slog.Info("debug listen", "addr", bound)
+	}
+	if cfg.Friend {
+		friendPID, err = startService(friend.New(), friend.Name)
+		if err != nil {
+			fail("new friend", err)
+		}
+	}
+	if cfg.Guild {
+		guildPID, err = startService(guildmgr.New(), guildmgr.Name)
+		if err != nil {
+			fail("new guildmgr", err)
+		}
+	}
+	if cfg.Match {
+		matchPID, err = startService(match.New(), match.Name)
+		if err != nil {
+			fail("new match", err)
+		}
+	}
+	if cfg.Role {
+		watchdogPID, err = startService(watchdog.New(), watchdog.Name)
+		if err != nil {
+			fail("new watchdog", err)
+		}
+		watchdogPong, err := pingName(watchdog.Name, ping)
+		if err != nil {
+			fail("call watchdog ping", err)
+		}
+		slog.Info("got watchdog reply", "pong", watchdogPong, "listen", cfg.Addr())
+	}
+	if cfg.Center {
+		if dbg := cfg.DebugAddr(); dbg != "" {
+			monitorPID, err = startService(monitor.New(dbg), monitor.Name)
+			if err != nil {
+				fail("new monitor", err)
+			}
+			slog.Info("debug listen", "addr", dbg)
+		}
 	}
 
-	slog.Info("server started", "listen", cfg.Addr())
+	slog.Info("server started",
+		"center", cfg.Center,
+		"guild", cfg.Guild,
+		"idgen", cfg.Idgen,
+		"friend", cfg.Friend,
+		"match", cfg.Match,
+		"onlinemgr", cfg.Onlinemgr,
+		"role", cfg.Role,
+	)
 
 	var page *http.Server
 	if addr := cfg.WebAddr(); addr != "" {
@@ -156,7 +185,6 @@ func main() {
 		if err != nil {
 			fail("page", err)
 		}
-		defer web.Shutdown(page)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -164,32 +192,45 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("server shutting down")
+	web.Shutdown(page)
+	// 先停接入和业务，摘别名时 harbor 还在；最后再停集群。
+	stopActor("watchdog", watchdogPID)
+	stopActor("match", matchPID)
+	stopActor("friend", friendPID)
+	stopActor("guildmgr", guildPID)
+	stopActor("idgen", idgenPID)
+	stopActor("onlinemgr", onlinePID)
+	stopActor("monitor", monitorPID)
+	stopActor("launcher", pid)
 	stopCluster()
-	if err := gonet.StopActor(watchdogPID); err != nil {
-		slog.Error("stop watchdog", "err", err)
-	}
-	if err := gonet.StopActor(matchPID); err != nil {
-		slog.Error("stop match", "err", err)
-	}
-	if err := gonet.StopActor(friendPID); err != nil {
-		slog.Error("stop friend", "err", err)
-	}
-	if err := gonet.StopActor(guildPID); err != nil {
-		slog.Error("stop guildmgr", "err", err)
-	}
-	if idgenPID != 0 {
-		if err := gonet.StopActor(idgenPID); err != nil {
-			slog.Error("stop idgen", "err", err)
-		}
-	}
-	if err := gonet.StopActor(onlinePID); err != nil {
-		slog.Error("stop onlinemgr", "err", err)
-	}
-	if err := gonet.StopActor(pid); err != nil {
-		slog.Error("stop launcher", "err", err)
-	}
 	gonet.Stop()
 	slog.Info("server stopped")
+}
+
+const (
+	pingTimeout    = time.Second
+	serviceTimeout = 10 * time.Second
+)
+
+func pingName(name string, ping gonet.MessageInterface) (any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	return gonet.SuspendCallName(ctx, name, ping)
+}
+
+func startService(impl gonet.ActorContextInterface, name string) (uint64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), serviceTimeout)
+	defer cancel()
+	return launcher.WaitService(ctx, impl, name)
+}
+
+func stopActor(label string, pid uint64) {
+	if pid == 0 {
+		return
+	}
+	if err := gonet.StopActor(pid); err != nil {
+		slog.Error("stop "+label, "err", err)
+	}
 }
 
 const (

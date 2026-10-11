@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gonet"
+
+	"gonet/services/internal/actormsg"
 )
 
 // ServiceResult 是 newservice 的结果，异步时交给 NewService 的 callback。
@@ -35,8 +37,8 @@ func NewService(from uint64, impl gonet.ActorContextInterface, serviceName strin
 	if callback == nil {
 		return ErrNilCallback
 	}
-	msg := &newServiceMsg{
-		BaseMessage: gonet.BaseMessage{Cmd: cmdNewService},
+	msg := &actormsg.LauncherNewService{
+		BaseMessage: gonet.BaseMessage{Cmd: actormsg.CmdLauncherNewService},
 		Impl:        impl,
 		ServiceName: serviceName,
 	}
@@ -102,8 +104,8 @@ func WaitService(ctx context.Context, impl gonet.ActorContextInterface, serviceN
 	if impl == nil {
 		return 0, gonet.ErrNilActor
 	}
-	msg := &newServiceMsg{
-		BaseMessage: gonet.BaseMessage{Cmd: cmdNewService},
+	msg := &actormsg.LauncherNewService{
+		BaseMessage: gonet.BaseMessage{Cmd: actormsg.CmdLauncherNewService},
 		Impl:        impl,
 		ServiceName: serviceName,
 	}

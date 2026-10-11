@@ -1130,6 +1130,70 @@ func TestSendJSONRoundTrip(t *testing.T) {
 	}
 }
 
+type pingA struct {
+	gonet.BaseMessage
+	A string `json:"a"`
+}
+
+type pingB struct {
+	gonet.BaseMessage
+	B string `json:"b"`
+}
+
+type pingActorA struct{ gonet.ActorContext }
+
+func (a *pingActorA) Init() error {
+	return gonet.RegisterCmd(a, "ping", func() gonet.MessageInterface { return &pingA{} }, func(e gonet.Envelope) {
+		m, ok := e.Msg.(*pingA)
+		if !ok || m == nil {
+			e.Reply("")
+			return
+		}
+		e.Reply(m.A)
+	})
+}
+
+type pingActorB struct{ gonet.ActorContext }
+
+func (a *pingActorB) Init() error {
+	return gonet.RegisterCmd(a, "ping", func() gonet.MessageInterface { return &pingB{} }, func(e gonet.Envelope) {
+		m, ok := e.Msg.(*pingB)
+		if !ok || m == nil {
+			e.Reply("")
+			return
+		}
+		e.Reply(m.B)
+	})
+}
+
+func TestSameCmdDifferentActors(t *testing.T) {
+	pidA := mustSpawn(t, &pingActorA{})
+	defer gonet.StopActor(pidA)
+	pidB := mustSpawn(t, &pingActorB{})
+	defer gonet.StopActor(pidB)
+
+	ctx, cancel := ctx1s(t)
+	defer cancel()
+	msgA := &pingA{A: "from-a"}
+	msgA.SetCmd("ping")
+	gotA, err := gonet.SuspendCall(ctx, pidA, msgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotA != "from-a" {
+		t.Fatalf("A got %#v", gotA)
+	}
+	msgB := &pingB{B: "from-b"}
+	msgB.SetCmd("ping")
+	gotB, err := gonet.SuspendCall(ctx, pidB, msgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotB != "from-b" {
+		t.Fatalf("B got %#v", gotB)
+	}
+}
+
 func TestSendRejectsEmptyCmdAndChannel(t *testing.T) {
 	pid := mustSpawn(t, &echoActor{})
 	defer gonet.StopActor(pid)

@@ -18,7 +18,7 @@ Go 模块名：`gonet`。业务侧可用 `replace gonet => ./gonet`。
 | `SuspendCall` / `SuspendCallName` | 阻塞当前协程等 `Reply`。给 main / 测试用，**禁止在 Dispatch 里调用** |
 | `SuspendCallMemory` / `SuspendCallMemoryName` | 阻塞 Call，正文保持原指针 |
 | `Register` / `Unregister` / `Query` | 别名 |
-| `RegisterCmd` / `Pack` | cmd 工厂 + `{cmd, data}` JSON；`.` 前缀系统命令不能 Pack |
+| `RegisterCmd` / `Pack` | 本 actor 的 cmd 工厂 + `{cmd, data}` JSON；`.` 前缀系统命令不能 Pack |
 | `Timeout` / `StopTimer` | 到期后 `Send` 到目标 mailbox |
 | `Monitor` | 只读快照（全局 + 每 actor 的 full/dead/call_timeout/slow/high） |
 | `ListenDebug` / `StopDebug` | 行协议：`monitor` / `kill <pid>` / `help` / `quit` |
@@ -39,7 +39,7 @@ gonet.Stop() // 已包含 StopDebug
 
 **别名。** 一对一，actor 死后自动摘名。名字不在本进程时返回 `ErrUnknownAlias`。
 
-**消息。** `Send`/`Call` 要求消息带有非空 cmd，并把结构体 `json.Marshal` 成 `*BaseMessage` 再入队；`Dispatch` 按 cmd 工厂 `Unpack` 成新结构体。已经是 `*BaseMessage`（例如 `Pack`）则原样投递。系统命令（`.` 前缀）不进 JSON。`SendMemory`/`CallMemory` 跳过编码，handler 拿到原指针。`net.Conn`、actor 实现走内存接口。回复值仍是原来的 Go 值，不进 JSON。
+**消息。** `Send`/`Call` 要求消息带有非空 cmd，并把结构体 `json.Marshal` 成 `*BaseMessage` 再入队；`Dispatch` 按本 actor 登记的 cmd 工厂 `Unpack` 成新结构体。已经是 `*BaseMessage`（例如 `Pack`）则原样投递。系统命令（`.` 前缀）不进 JSON。`SendMemory`/`CallMemory` 跳过编码，handler 拿到原指针。`net.Conn`、actor 实现走内存接口。回复值仍是原来的 Go 值，不进 JSON。
 
 异步 `Call` 的调用方应 `RegisterCmd(gonet.CmdResponse, ...)` 处理 `CallResponse`。未登记时默认静默丢弃（不报未知命令）。
 

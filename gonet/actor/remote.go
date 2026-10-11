@@ -16,13 +16,27 @@ func ServiceAlias(service string, nodeID uint64) string {
 }
 
 // RemoteHooks 由 harbor 在启动时装上。没装时，别名只在本进程内有效。
+// 本进程找不到别名时，actor 才走这些钩子。
 type RemoteHooks struct {
-	Publish     func(name string) error
-	Unpublish   func(name string) error
-	Forward     func(fromName, name string, msg *BaseMessage) error
-	ForwardAck  func(fromName, name string, msg *BaseMessage) error
+	// Publish 把本进程新别名登记到集群，其它节点才能按这个名字找到它。
+	// Spawn、Register 写入本地表之后调用。登记失败时这次起名作废。
+	Publish func(name string) error
+	// Unpublish 从集群摘掉本进程别名。Unregister 和 actor 退出时调用。
+	Unpublish func(name string) error
+	// Forward 把消息发到别名所在节点，发出去就返回，不等对方 mailbox 收下。
+	// SendName 在本地没有这个别名时走这里。fromName 是发送方别名，可以为空。
+	Forward func(fromName, name string, msg *BaseMessage) error
+	// ForwardAck 和 Forward 同一条路，但要等对方 mailbox 收下才返回。
+	// 对方不存在、连不上或超时都返回错误。SendNameAck 走这里。
+	ForwardAck func(fromName, name string, msg *BaseMessage) error
+	// ForwardCall 把 Call 发到别名所在节点，并带上调用方的 session。
+	// 等到对方 mailbox 收下才返回，这时还没有 Reply。收不了则调用方取消这次 session。
+	// fromName 必须是调用方别名，Reply 靠它找回来。
 	ForwardCall func(fromName, name string, msg *BaseMessage, session uint64) error
-	ReplyCall   func(name string, session uint64, v any, err error)
+	// ReplyCall 把 Call 的结果送回另一节点上的调用方。
+	// name 是调用方别名，session 是对方 Call 时带过来的编号。
+	// v 是 Reply 的值，err 非空表示这次调用失败。
+	ReplyCall func(name string, session uint64, v any, err error)
 }
 
 var (

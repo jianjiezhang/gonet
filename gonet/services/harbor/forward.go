@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 const maxForward = 64
@@ -23,11 +24,12 @@ type peerSend struct {
 	Session uint64 `json:"session,omitempty"`
 }
 
-// peerReply 是对方处理完 Call 之后，按调用方别名送回来的 Reply。
+// peerReply 和 peerSend 是同一条消息：cmd 加 JSON。多出来的是这次 Call 的 session 和错误。
 type peerReply struct {
 	From    string `json:"from"`
 	Session uint64 `json:"session"`
-	Value   string `json:"value,omitempty"`
+	Cmd     string `json:"cmd,omitempty"`
+	Data    string `json:"data,omitempty"`
 	Err     string `json:"err,omitempty"`
 }
 
@@ -49,15 +51,17 @@ type remoteSend struct {
 
 type remoteReply struct {
 	actor.BaseMessage
-	name    string
-	session uint64
-	value   string
-	errText string
+	name     string
+	session  uint64
+	replyCmd string
+	data     string
+	errText  string
 }
 
 type pendingReply struct {
 	session uint64
-	value   string
+	cmd     string
+	data    string
 	errText string
 }
 
@@ -77,15 +81,15 @@ func unpublishCluster(name string) error {
 }
 
 func waitCluster(name string, publish bool) error {
-	ch := make(chan Result, 1)
+	ch := make(chan actormsg.HarborResult, 1)
 	var msg actor.MessageInterface
 	if publish {
-		m := &RegisterName{Name: name, done: ch}
-		m.SetCmd(CmdRegisterName)
+		m := &actormsg.HarborRegisterName{Name: name, Done: ch}
+		m.SetCmd(actormsg.CmdHarborRegisterName)
 		msg = m
 	} else {
-		m := &UnregisterName{Name: name, done: ch}
-		m.SetCmd(CmdUnregisterName)
+		m := &actormsg.HarborUnregisterName{Name: name, Done: ch}
+		m.SetCmd(actormsg.CmdHarborUnregisterName)
 		msg = m
 	}
 	if err := actor.SendMemoryName(Name, msg); err != nil {
@@ -93,10 +97,10 @@ func waitCluster(name string, publish bool) error {
 	}
 	select {
 	case r := <-ch:
-		if r.OK || (!publish && r.Err == harbormgr.ErrUnknown) {
+		if r.OK || (!publish && r.Err == harborproto.ErrUnknown) {
 			return nil
 		}
-		if r.Err == harbormgr.ErrTaken {
+		if r.Err == harborproto.ErrTaken {
 			return actor.ErrAliasTaken
 		}
 		if r.Err == "" {
@@ -104,7 +108,7 @@ func waitCluster(name string, publish bool) error {
 		}
 		return errors.New(r.Err)
 	case <-time.After(requestTimeout):
-		return errors.New(ErrTimeout)
+		return errors.New(actormsg.ErrHarborTimeout)
 	}
 }
 
@@ -113,7 +117,7 @@ func forwardCluster(fromName, name string, msg *actor.BaseMessage) error {
 		return actor.ErrNilMessage
 	}
 	m := &remoteSend{fromName: fromName, name: name, cmd: msg.Command(), data: msg.Payload()}
-	m.SetCmd(cmdRemoteSend)
+	m.SetCmd(actormsg.CmdHarborRemoteSend)
 	return actor.SendMemoryName(Name, m)
 }
 
@@ -123,7 +127,7 @@ func forwardClusterAck(fromName, name string, msg *actor.BaseMessage) error {
 	}
 	ch := make(chan error, 1)
 	m := &remoteSend{fromName: fromName, name: name, cmd: msg.Command(), data: msg.Payload(), done: ch}
-	m.SetCmd(cmdRemoteSend)
+	m.SetCmd(actormsg.CmdHarborRemoteSend)
 	if err := actor.SendMemoryName(Name, m); err != nil {
 		return err
 	}
@@ -151,7 +155,7 @@ func forwardClusterCall(fromName, name string, msg *actor.BaseMessage, session u
 		done:     ch,
 		session:  session,
 	}
-	m.SetCmd(cmdRemoteSend)
+	m.SetCmd(actormsg.CmdHarborRemoteSend)
 	if err := actor.SendMemoryName(Name, m); err != nil {
 		return err
 	}
@@ -164,18 +168,18 @@ func forwardClusterCall(fromName, name string, msg *actor.BaseMessage, session u
 }
 
 func replyCluster(name string, session uint64, v any, callErr error) {
-	raw := ""
+	cmd, data := "", ""
 	if v != nil && callErr == nil {
-		b, err := json.Marshal(v)
+		var err error
+		cmd, data, err = packReply(v)
 		if err != nil {
 			slog.Warn("harbor: 跨服回复无法编码", "session", session, "err", err)
 			callErr = actor.ErrRemoteDown
-		} else {
-			raw = string(b)
+			cmd, data = "", ""
 		}
 	}
-	m := &remoteReply{name: name, session: session, value: raw, errText: replyCause(callErr)}
-	m.SetCmd(cmdRemoteReply)
+	m := &remoteReply{name: name, session: session, replyCmd: cmd, data: data, errText: replyCause(callErr)}
+	m.SetCmd(actormsg.CmdHarborRemoteReply)
 	if err := actor.SendMemoryName(Name, m); err != nil {
 		slog.Warn("harbor: 跨服回复没有送出", "session", session, "err", err)
 	}
@@ -228,7 +232,7 @@ func (a *Actor) queueForward(body peerSend) {
 
 func (a *Actor) queryInflight(name string) bool {
 	for _, p := range a.pending {
-		if p != nil && p.req == harbormgr.CmdQueryAddr && p.name == name {
+		if p != nil && p.req == harborproto.CmdQueryAddr && p.name == name {
 			return true
 		}
 	}
@@ -304,7 +308,7 @@ func (a *Actor) enqueuePeer(addr string, body peerSend) string {
 }
 
 func (a *Actor) enqueueCmd(addr string, cmd uint16, body any) string {
-	f, err := proto.Pack(cmd, body)
+	f, err := harborproto.Pack(cmd, body)
 	if err != nil {
 		slog.Warn("harbor: 跨服消息编码失败", "addr", addr, "err", err)
 		return "down"
@@ -332,7 +336,7 @@ func (a *Actor) onPeerReply(m *peerEvent) {
 		return
 	}
 	pid, _ := actor.Query(body.From)
-	actor.FinishCall(pid, body.Session, decodeReply(body.Value), mapReplyErr(body.Err))
+	actor.FinishCall(pid, body.Session, decodeReply(pid, body.Cmd, body.Data), mapReplyErr(body.Err))
 }
 
 func (a *Actor) onPeerSend(m *peerEvent, body peerSend) {
@@ -349,10 +353,10 @@ func (a *Actor) onRemoteReply(e actor.Envelope) {
 		return
 	}
 	if pid, err := actor.Query(m.name); err == nil {
-		actor.FinishCall(pid, m.session, decodeReply(m.value), mapReplyErr(m.errText))
+		actor.FinishCall(pid, m.session, decodeReply(pid, m.replyCmd, m.data), mapReplyErr(m.errText))
 		return
 	}
-	body := pendingReply{session: m.session, value: m.value, errText: m.errText}
+	body := pendingReply{session: m.session, cmd: m.replyCmd, data: m.data, errText: m.errText}
 	if dest, ok := a.remoteName[m.name]; ok {
 		a.sendReply(dest, m.name, body)
 		return
@@ -376,7 +380,7 @@ func (a *Actor) flushReply(name string) {
 	delete(a.replyHold, name)
 	if pid, err := actor.Query(name); err == nil {
 		for _, body := range batch {
-			actor.FinishCall(pid, body.session, decodeReply(body.value), mapReplyErr(body.errText))
+			actor.FinishCall(pid, body.session, decodeReply(pid, body.cmd, body.data), mapReplyErr(body.errText))
 		}
 		return
 	}
@@ -399,7 +403,7 @@ func (a *Actor) dropReply(name string) {
 }
 
 func (a *Actor) sendReply(dest remoteDest, name string, body pendingReply) {
-	frame := peerReply{From: name, Session: body.session, Value: body.value, Err: body.errText}
+	frame := peerReply{From: name, Session: body.session, Cmd: body.cmd, Data: body.data, Err: body.errText}
 	a.ensurePeer(dest.addr, dest.node)
 	if cause := a.enqueueCmd(dest.addr, cmdPeerReply, &frame); cause != "" {
 		slog.Warn("harbor: 跨服回复送不出去", "addr", dest.addr, "name", name, "err", cause)
@@ -414,11 +418,11 @@ func (a *Actor) onPeerAck(m *peerEvent) {
 	a.finishAck(ack.ID, ack.Err)
 }
 
-func (a *Actor) writeAck(out chan proto.Frame, id uint64, cause string) {
+func (a *Actor) writeAck(out chan harborproto.Frame, id uint64, cause string) {
 	if out == nil || id == 0 {
 		return
 	}
-	f, err := proto.Pack(cmdPeerAck, &peerAck{ID: id, Err: cause})
+	f, err := harborproto.Pack(cmdPeerAck, &peerAck{ID: id, Err: cause})
 	if err != nil {
 		return
 	}
@@ -510,12 +514,40 @@ func mapReplyErr(cause string) error {
 	}
 }
 
-func decodeReply(raw string) any {
-	if raw == "" {
+// packReply 把回复收成和 Send 一样的 cmd + JSON。没有 cmd 的值（字符串、数字、布尔）只放 JSON。
+func packReply(v any) (string, string, error) {
+	if v == nil {
+		return "", "", nil
+	}
+	if m, ok := v.(*actor.BaseMessage); ok {
+		if m == nil {
+			return "", "", nil
+		}
+		return m.Command(), m.Payload(), nil
+	}
+	cmd := ""
+	if c, ok := v.(interface{ Command() string }); ok && c != nil {
+		cmd = c.Command()
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", "", err
+	}
+	return cmd, string(b), nil
+}
+
+// decodeReply 有 cmd 时用调用方登记的工厂解开，和 Send 进 Dispatch 一样。没有 cmd 时按 JSON 解成 any。
+func decodeReply(pid uint64, cmd, data string) any {
+	if cmd != "" && pid != 0 {
+		if msg, err := actor.Unpack(pid, cmd, data); err == nil && msg != nil {
+			return msg
+		}
+	}
+	if data == "" {
 		return nil
 	}
 	var v any
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+	if err := json.Unmarshal([]byte(data), &v); err != nil {
 		return nil
 	}
 	return v

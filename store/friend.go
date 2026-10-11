@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"gonet/mysql"
+	"gonet/components/mysql"
 )
 
 func (s *mysqlStore) LoadFriends(ctx context.Context) ([]FriendEdge, error) {

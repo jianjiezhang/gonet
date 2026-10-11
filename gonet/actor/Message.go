@@ -3,9 +3,6 @@ package actor
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
-	"reflect"
-	"sync"
 )
 
 var (
@@ -24,50 +21,7 @@ type MessageInterface interface {
 // MsgFactory 按 cmd 构造空的业务消息实例，供反序列化写入。
 type MsgFactory func() MessageInterface
 
-var (
-	msgMu    sync.RWMutex
-	msgTypes = map[string]MsgFactory{}
-)
-
-// RegisterMsg 把 cmd 登记到消息类型表。已存在则覆盖为新工厂；类型变了会打日志。
-func RegisterMsg(cmd string, factory MsgFactory) error {
-	if cmd == "" {
-		return ErrInvalidCmd
-	}
-	if factory == nil {
-		return ErrNilFactory
-	}
-	msgMu.Lock()
-	defer msgMu.Unlock()
-	if old, ok := msgTypes[cmd]; ok {
-		ot, nt := factoryType(old), factoryType(factory)
-		if ot != nt {
-			slog.Warn("gonet: cmd 工厂已替换", "cmd", cmd, "old", ot, "new", nt)
-		}
-	}
-	msgTypes[cmd] = factory
-	return nil
-}
-
-func factoryType(f MsgFactory) string {
-	if f == nil {
-		return "<nil>"
-	}
-	v := f()
-	if v == nil {
-		return "<nil>"
-	}
-	return reflect.TypeOf(v).String()
-}
-
-func lookupMsg(cmd string) MsgFactory {
-	msgMu.RLock()
-	f := msgTypes[cmd]
-	msgMu.RUnlock()
-	return f
-}
-
-// BaseMessage 协议头：Cmd 索引类型表和 handler 表，Data 是 JSON 正文。
+// BaseMessage 协议头：Cmd 索引本 actor 的类型表和 handler 表，Data 是 JSON 正文。
 type BaseMessage struct {
 	Cmd  string `json:"cmd"`
 	Data string `json:"data"`
@@ -116,12 +70,11 @@ func Pack(cmd string, payload any) (*BaseMessage, error) {
 	return &BaseMessage{Cmd: cmd, Data: data}, nil
 }
 
-// Unpack 用 cmd 查类型表，把 JSON Data 填进新实例。
-func Unpack(cmd, data string) (MessageInterface, error) {
+// unpack 用工厂把 JSON Data 填进新实例。工厂为空表示这个 actor 没有这条命令。
+func unpack(cmd, data string, f MsgFactory) (MessageInterface, error) {
 	if cmd == "" {
 		return nil, ErrInvalidCmd
 	}
-	f := lookupMsg(cmd)
 	if f == nil {
 		return nil, ErrUnknownCmd
 	}
@@ -170,7 +123,7 @@ func prepareOutgoing(msg MessageInterface, memory bool) (MessageInterface, error
 	return &BaseMessage{Cmd: cmd, Data: string(b)}, nil
 }
 
-func decodeIncoming(msg MessageInterface) (cmd string, out MessageInterface, err error) {
+func decodeIncoming(msg MessageInterface, unpackFn func(cmd, data string) (MessageInterface, error)) (cmd string, out MessageInterface, err error) {
 	if msg == nil {
 		return "", nil, ErrNilMessage
 	}
@@ -190,7 +143,10 @@ func decodeIncoming(msg MessageInterface) (cmd string, out MessageInterface, err
 		if IsSystemCmd(cmd) {
 			return "", nil, ErrSystemCmd
 		}
-		out, err = Unpack(cmd, data)
+		if unpackFn == nil {
+			return "", nil, ErrUnknownCmd
+		}
+		out, err = unpackFn(cmd, data)
 		return cmd, out, err
 	default:
 		return cmd, msg, nil

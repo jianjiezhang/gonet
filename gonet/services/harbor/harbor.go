@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 // Name 是本进程 harbor 的别名。地址登记拿到 nodeid 之前为空，之后直接是 .harbor_节点编号。
@@ -42,7 +43,7 @@ type asker struct {
 	fromName string
 	id       uint64
 	deadline time.Time
-	done     chan Result
+	done     chan actormsg.HarborResult
 }
 
 // inflight 是一条已经发给 harbormgr 的请求。
@@ -65,7 +66,7 @@ type Actor struct {
 	dialBase    context.Context
 	dialCancel  context.CancelFunc
 	ep          *endpoint
-	out         chan proto.Frame
+	out         chan harborproto.Frame
 	names       map[string]struct{}
 	remoteName  map[string]remoteDest
 	peers       map[string]*peer
@@ -234,18 +235,18 @@ func (a *Actor) onHello(e actor.Envelope) {
 }
 
 func (a *Actor) onRegisterName(e actor.Envelope) {
-	m, ok := e.Msg.(*RegisterName)
+	m, ok := e.Msg.(*actormsg.HarborRegisterName)
 	if !ok {
 		return
 	}
 	ask := a.newAsk(e, m.ID)
 	if m.Name == "" {
-		a.notify(ask, CmdRegisterName, "", "", harbormgr.ErrInvalid)
+		a.notify(ask, actormsg.CmdHarborRegisterName, "", "", harborproto.ErrInvalid)
 		return
 	}
 	delete(a.dropping, m.Name)
 	if _, ok := a.names[m.Name]; ok {
-		a.notify(ask, CmdRegisterName, a.addr, m.Name, harbormgr.ErrTaken)
+		a.notify(ask, actormsg.CmdHarborRegisterName, a.addr, m.Name, harborproto.ErrTaken)
 		return
 	}
 	if id, busy := a.publishing[m.Name]; busy {
@@ -256,7 +257,7 @@ func (a *Actor) onRegisterName(e actor.Envelope) {
 	}
 	if !a.addrOK {
 		if !a.holdWaiting(m.Name, ask) {
-			a.notify(ask, CmdRegisterName, a.addr, m.Name, ErrBusy)
+			a.notify(ask, actormsg.CmdHarborRegisterName, a.addr, m.Name, actormsg.ErrHarborBusy)
 		}
 		return
 	}
@@ -264,20 +265,20 @@ func (a *Actor) onRegisterName(e actor.Envelope) {
 }
 
 func (a *Actor) onUnregisterName(e actor.Envelope) {
-	m, ok := e.Msg.(*UnregisterName)
+	m, ok := e.Msg.(*actormsg.HarborUnregisterName)
 	if !ok {
 		return
 	}
 	ask := a.newAsk(e, m.ID)
 	if m.Name == "" {
-		a.notify(ask, CmdUnregisterName, "", "", harbormgr.ErrInvalid)
+		a.notify(ask, actormsg.CmdHarborUnregisterName, "", "", harborproto.ErrInvalid)
 		return
 	}
 	_, waiting := a.waiting[m.Name]
 	if asks, ok := a.waiting[m.Name]; ok {
 		delete(a.waiting, m.Name)
 		for _, old := range asks {
-			a.notify(old, CmdRegisterName, a.addr, m.Name, harbormgr.ErrUnknown)
+			a.notify(old, actormsg.CmdHarborRegisterName, a.addr, m.Name, harborproto.ErrUnknown)
 		}
 	}
 	_, reviving := a.revive[m.Name]
@@ -287,16 +288,16 @@ func (a *Actor) onUnregisterName(e actor.Envelope) {
 		return
 	}
 	if _, ok := a.names[m.Name]; !ok {
-		errText := harbormgr.ErrUnknown
+		errText := harborproto.ErrUnknown
 		if waiting || reviving {
 			errText = ""
 		}
-		a.notify(ask, CmdUnregisterName, a.addr, m.Name, errText)
+		a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, m.Name, errText)
 		return
 	}
 	if !a.addrOK {
 		if !a.holdDropping(m.Name, ask) {
-			a.notify(ask, CmdUnregisterName, a.addr, m.Name, ErrBusy)
+			a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, m.Name, actormsg.ErrHarborBusy)
 		}
 		return
 	}
@@ -304,18 +305,18 @@ func (a *Actor) onUnregisterName(e actor.Envelope) {
 }
 
 func (a *Actor) onQueryAddr(e actor.Envelope) {
-	m, ok := e.Msg.(*QueryAddr)
+	m, ok := e.Msg.(*actormsg.HarborQueryAddr)
 	if !ok {
 		return
 	}
 	ask := a.newAsk(e, m.ID)
 	if m.Name == "" {
-		a.notify(ask, CmdQueryAddr, "", "", harbormgr.ErrInvalid)
+		a.notify(ask, actormsg.CmdHarborQueryAddr, "", "", harborproto.ErrInvalid)
 		return
 	}
 	if dest, ok := a.remoteName[m.Name]; ok {
 		a.ensurePeer(dest.addr, dest.node)
-		a.notify(ask, CmdQueryAddr, dest.addr, m.Name, "")
+		a.notify(ask, actormsg.CmdHarborQueryAddr, dest.addr, m.Name, "")
 		return
 	}
 	if a.out == nil || len(a.pending) >= maxPending {
@@ -326,18 +327,18 @@ func (a *Actor) onQueryAddr(e actor.Envelope) {
 }
 
 func (a *Actor) onSetAddr(e actor.Envelope) {
-	m, ok := e.Msg.(*SetAddr)
+	m, ok := e.Msg.(*actormsg.HarborSetAddr)
 	if !ok {
 		return
 	}
 	ask := a.newAsk(e, m.ID)
 	if m.Addr == "" {
-		a.notify(ask, CmdSetAddr, "", "", harbormgr.ErrInvalid)
+		a.notify(ask, actormsg.CmdHarborSetAddr, "", "", harborproto.ErrInvalid)
 		return
 	}
 	if m.Addr != a.addr {
 		if err := a.bind(m.Addr); err != nil {
-			a.notify(ask, CmdSetAddr, "", "", harbormgr.ErrInvalid)
+			a.notify(ask, actormsg.CmdHarborSetAddr, "", "", harborproto.ErrInvalid)
 			return
 		}
 	}
@@ -355,20 +356,20 @@ func (a *Actor) sendQuery(name string, ask asker) {
 		return
 	}
 	id := a.allocID()
-	if err := a.sendMgr(proto.CmdQueryAddr, &proto.QueryAddr{ID: id, Name: name}); err != nil {
+	if err := a.sendMgr(harborproto.CmdQueryAddr, &harborproto.QueryAddr{ID: id, Name: name}); err != nil {
 		a.enqueueQuery(ask, name, true)
 		return
 	}
-	a.pending[id] = &inflight{askers: []asker{ask}, name: name, req: harbormgr.CmdQueryAddr}
+	a.pending[id] = &inflight{askers: []asker{ask}, name: name, req: harborproto.CmdQueryAddr}
 }
 
 func (a *Actor) enqueueQuery(ask asker, name string, force bool) {
 	if a.expired(ask) {
-		a.notify(ask, CmdQueryAddr, "", name, ErrTimeout)
+		a.notify(ask, actormsg.CmdHarborQueryAddr, "", name, actormsg.ErrHarborTimeout)
 		return
 	}
 	if !force && len(a.queued) >= maxQueued {
-		a.notify(ask, CmdQueryAddr, "", name, ErrBusy)
+		a.notify(ask, actormsg.CmdHarborQueryAddr, "", name, actormsg.ErrHarborBusy)
 		return
 	}
 	a.queued = append(a.queued, pendingQuery{ask: ask, name: name})
@@ -383,7 +384,7 @@ func (a *Actor) flushQueued() {
 }
 
 func (a *Actor) onMgrResult(e actor.Envelope) {
-	m, ok := e.Msg.(*harbormgr.Result)
+	m, ok := e.Msg.(*actormsg.HarborMgrResult)
 	if !ok {
 		return
 	}
@@ -392,30 +393,30 @@ func (a *Actor) onMgrResult(e actor.Envelope) {
 		slog.Warn("harbor: 未知回包", "cmd", m.Env.Cmd)
 		return
 	}
-	id, ok := proto.IDOf(body)
+	id, ok := harborproto.IDOf(body)
 	if !ok {
 		return
 	}
 	p := a.pending[id]
 	delete(a.pending, id)
 	switch r := body.(type) {
-	case *proto.RegisterAddrResult:
+	case *harborproto.RegisterAddrResult:
 		a.onAddrReady(r, p)
-	case *proto.HeartbeatResult:
+	case *harborproto.HeartbeatResult:
 		a.onBeatResult(r)
-	case *proto.RegisterNameResult:
+	case *harborproto.RegisterNameResult:
 		a.onNameReady(r, p)
-	case *proto.UnregisterNameResult:
+	case *harborproto.UnregisterNameResult:
 		a.onNameGone(r, p)
-	case *proto.QueryAddrResult:
+	case *harborproto.QueryAddrResult:
 		a.onQueryResult(r, p)
-	case *proto.UnregisterAddrResult:
+	case *harborproto.UnregisterAddrResult:
 	default:
 		slog.Warn("harbor: 未知回包", "cmd", m.Env.Cmd)
 	}
 }
 
-func (a *Actor) onAddrReady(m *proto.RegisterAddrResult, p *inflight) {
+func (a *Actor) onAddrReady(m *harborproto.RegisterAddrResult, p *inflight) {
 	var asks []asker
 	if p != nil {
 		asks = p.askers
@@ -428,7 +429,7 @@ func (a *Actor) onAddrReady(m *proto.RegisterAddrResult, p *inflight) {
 		}
 		slog.Warn("harbor: 登记地址失败", "addr", a.addr, "err", m.Err)
 		for _, ask := range asks {
-			a.notify(ask, CmdSetAddr, a.addr, "", errText(m.Err))
+			a.notify(ask, actormsg.CmdHarborSetAddr, a.addr, "", errText(m.Err))
 		}
 		return
 	}
@@ -440,7 +441,7 @@ func (a *Actor) onAddrReady(m *proto.RegisterAddrResult, p *inflight) {
 	}
 	slog.Info("harbor addr ready", "node", a.nodeID, "addr", a.addr, "fresh", m.Fresh)
 	for _, ask := range asks {
-		a.notify(ask, CmdSetAddr, a.addr, "", "")
+		a.notify(ask, actormsg.CmdHarborSetAddr, a.addr, "", "")
 	}
 	if a.resyncing {
 		a.resyncing = false
@@ -485,15 +486,15 @@ func (a *Actor) ensureOwnName() {
 	a.sendRegisterName(name, nil)
 }
 
-func (a *Actor) onBeatResult(m *proto.HeartbeatResult) {
+func (a *Actor) onBeatResult(m *harborproto.HeartbeatResult) {
 	if m.OK {
 		return
 	}
-	if m.Err == harbormgr.ErrTaken {
+	if m.Err == harborproto.ErrTaken {
 		a.giveUp("节点编号已被占用")
 		return
 	}
-	if m.Err != harbormgr.ErrUnknown {
+	if m.Err != harborproto.ErrUnknown {
 		return
 	}
 	slog.Warn("harbor: 心跳发现节点已下线", "node", a.nodeID, "addr", a.addr)
@@ -507,7 +508,7 @@ func (a *Actor) giveUp(reason string) {
 	os.Exit(1)
 }
 
-func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
+func (a *Actor) onNameReady(m *harborproto.RegisterNameResult, p *inflight) {
 	defer a.flushResync()
 	name := m.Name
 	if name == "" && p != nil {
@@ -518,7 +519,7 @@ func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
 		delete(a.cancel, name)
 		if p != nil {
 			for _, ask := range p.askers {
-				a.notify(ask, CmdRegisterName, a.addr, name, harbormgr.ErrUnknown)
+				a.notify(ask, actormsg.CmdHarborRegisterName, a.addr, name, harborproto.ErrUnknown)
 			}
 		}
 		if m.OK {
@@ -526,7 +527,7 @@ func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
 			return
 		}
 		for _, ask := range asks {
-			a.notify(ask, CmdUnregisterName, a.addr, name, "")
+			a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, name, "")
 		}
 		return
 	}
@@ -541,7 +542,7 @@ func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
 		}
 		if p != nil {
 			for _, ask := range p.askers {
-				a.notify(ask, CmdRegisterName, m.Addr, name, errText(m.Err))
+				a.notify(ask, actormsg.CmdHarborRegisterName, m.Addr, name, errText(m.Err))
 			}
 		}
 		return
@@ -550,7 +551,7 @@ func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
 		slog.Warn("harbor: 登记别名失败", "name", name, "err", m.Err)
 		if p != nil {
 			for _, ask := range p.askers {
-				a.notify(ask, CmdRegisterName, m.Addr, name, errText(m.Err))
+				a.notify(ask, actormsg.CmdHarborRegisterName, m.Addr, name, errText(m.Err))
 			}
 		}
 		return
@@ -560,12 +561,12 @@ func (a *Actor) onNameReady(m *proto.RegisterNameResult, p *inflight) {
 	slog.Info("harbor name ready", "name", name, "addr", a.addr)
 	if p != nil {
 		for _, ask := range p.askers {
-			a.notify(ask, CmdRegisterName, a.addr, name, "")
+			a.notify(ask, actormsg.CmdHarborRegisterName, a.addr, name, "")
 		}
 	}
 }
 
-func (a *Actor) onNameGone(m *proto.UnregisterNameResult, p *inflight) {
+func (a *Actor) onNameGone(m *harborproto.UnregisterNameResult, p *inflight) {
 	name := m.Name
 	if name == "" && p != nil {
 		name = p.name
@@ -573,7 +574,7 @@ func (a *Actor) onNameGone(m *proto.UnregisterNameResult, p *inflight) {
 	if !m.OK {
 		if p != nil {
 			for _, ask := range p.askers {
-				a.notify(ask, CmdUnregisterName, a.addr, name, errText(m.Err))
+				a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, name, errText(m.Err))
 			}
 		}
 		return
@@ -583,12 +584,12 @@ func (a *Actor) onNameGone(m *proto.UnregisterNameResult, p *inflight) {
 	slog.Info("harbor name gone", "name", name, "addr", a.addr)
 	if p != nil {
 		for _, ask := range p.askers {
-			a.notify(ask, CmdUnregisterName, a.addr, name, "")
+			a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, name, "")
 		}
 	}
 }
 
-func (a *Actor) onQueryResult(m *proto.QueryAddrResult, p *inflight) {
+func (a *Actor) onQueryResult(m *harborproto.QueryAddrResult, p *inflight) {
 	if p == nil {
 		return
 	}
@@ -601,7 +602,7 @@ func (a *Actor) onQueryResult(m *proto.QueryAddrResult, p *inflight) {
 		text = errText(m.Err)
 		a.forgetRemote(name)
 		cause := "down"
-		if m.Err == "" || m.Err == harbormgr.ErrUnknown {
+		if m.Err == "" || m.Err == harborproto.ErrUnknown {
 			cause = "unknown"
 		}
 		a.dropForward(name, cause)
@@ -612,12 +613,12 @@ func (a *Actor) onQueryResult(m *proto.QueryAddrResult, p *inflight) {
 		a.flushReply(name)
 	}
 	for _, ask := range p.askers {
-		a.notify(ask, CmdQueryAddr, m.Addr, name, text)
+		a.notify(ask, actormsg.CmdHarborQueryAddr, m.Addr, name, text)
 	}
 }
 
 func (a *Actor) onBeat(e actor.Envelope) {
-	if _, ok := e.Msg.(*beatMsg); !ok {
+	if _, ok := e.Msg.(*actormsg.HarborBeat); !ok {
 		return
 	}
 	if !a.addrOK {
@@ -687,7 +688,7 @@ func (a *Actor) discardKept() {
 		delete(a.dropping, name)
 		delete(a.revive, name)
 		for _, ask := range asks {
-			a.notify(ask, CmdUnregisterName, a.addr, name, "")
+			a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, name, "")
 		}
 	}
 }
@@ -749,7 +750,7 @@ func (a *Actor) sendRegisterAddr(asks []asker) {
 		return
 	}
 	for _, p := range a.pending {
-		if p != nil && p.req == harbormgr.CmdRegisterAddr {
+		if p != nil && p.req == harborproto.CmdRegisterAddr {
 			p.askers = append(p.askers, asks...)
 			return
 		}
@@ -759,11 +760,11 @@ func (a *Actor) sendRegisterAddr(asks []asker) {
 		return
 	}
 	id := a.allocID()
-	if err := a.sendMgr(proto.CmdRegisterAddr, &proto.RegisterAddr{ID: id, NodeID: a.nodeID, Addr: a.addr}); err != nil {
+	if err := a.sendMgr(harborproto.CmdRegisterAddr, &harborproto.RegisterAddr{ID: id, NodeID: a.nodeID, Addr: a.addr}); err != nil {
 		a.addrAsks = append(a.addrAsks, asks...)
 		return
 	}
-	a.pending[id] = &inflight{askers: asks, req: harbormgr.CmdRegisterAddr}
+	a.pending[id] = &inflight{askers: asks, req: harborproto.CmdRegisterAddr}
 }
 
 func (a *Actor) sendRegisterName(name string, askers []asker) {
@@ -772,12 +773,12 @@ func (a *Actor) sendRegisterName(name string, askers []asker) {
 		return
 	}
 	id := a.allocID()
-	if err := a.sendMgr(proto.CmdRegisterName, &proto.RegisterName{ID: id, NodeID: a.nodeID, Addr: a.addr, Name: name}); err != nil {
+	if err := a.sendMgr(harborproto.CmdRegisterName, &harborproto.RegisterName{ID: id, NodeID: a.nodeID, Addr: a.addr, Name: name}); err != nil {
 		a.waiting[name] = append(a.waiting[name], askers...)
 		return
 	}
 	a.publishing[name] = id
-	a.pending[id] = &inflight{askers: askers, name: name, req: harbormgr.CmdRegisterName}
+	a.pending[id] = &inflight{askers: askers, name: name, req: harborproto.CmdRegisterName}
 }
 
 func (a *Actor) sendUnregisterName(name string, askers []asker) {
@@ -786,11 +787,11 @@ func (a *Actor) sendUnregisterName(name string, askers []asker) {
 		return
 	}
 	id := a.allocID()
-	if err := a.sendMgr(proto.CmdUnregisterName, &proto.UnregisterName{ID: id, NodeID: a.nodeID, Addr: a.addr, Name: name}); err != nil {
+	if err := a.sendMgr(harborproto.CmdUnregisterName, &harborproto.UnregisterName{ID: id, NodeID: a.nodeID, Addr: a.addr, Name: name}); err != nil {
 		a.dropping[name] = append(a.dropping[name], askers...)
 		return
 	}
-	a.pending[id] = &inflight{askers: askers, name: name, req: harbormgr.CmdUnregisterName}
+	a.pending[id] = &inflight{askers: askers, name: name, req: harborproto.CmdUnregisterName}
 }
 
 func (a *Actor) sendHeartbeat() {
@@ -798,28 +799,28 @@ func (a *Actor) sendHeartbeat() {
 		return
 	}
 	id := a.allocID()
-	if err := a.sendMgr(proto.CmdHeartbeat, &proto.Heartbeat{ID: id, NodeID: a.nodeID, Addr: a.addr}); err != nil {
+	if err := a.sendMgr(harborproto.CmdHeartbeat, &harborproto.Heartbeat{ID: id, NodeID: a.nodeID, Addr: a.addr}); err != nil {
 		return
 	}
-	a.pending[id] = &inflight{req: harbormgr.CmdHeartbeat}
+	a.pending[id] = &inflight{req: harborproto.CmdHeartbeat}
 }
 
 func (a *Actor) armBeat() error {
-	msg := &beatMsg{}
-	msg.SetCmd(cmdBeat)
+	msg := &actormsg.HarborBeat{}
+	msg.SetCmd(actormsg.CmdHarborBeat)
 	_, err := a.Timeout(beatEvery, msg)
 	return err
 }
 
 func (a *Actor) armExpire() error {
-	msg := &expireMsg{}
-	msg.SetCmd(cmdExpire)
+	msg := &actormsg.HarborExpire{}
+	msg.SetCmd(actormsg.CmdHarborExpire)
 	_, err := a.Timeout(expireEvery, msg)
 	return err
 }
 
 func (a *Actor) onExpire(e actor.Envelope) {
-	if _, ok := e.Msg.(*expireMsg); !ok {
+	if _, ok := e.Msg.(*actormsg.HarborExpire); !ok {
 		return
 	}
 	a.dropExpired(time.Now())
@@ -832,7 +833,7 @@ func (a *Actor) dropExpired(now time.Time) {
 	for name, asks := range a.waiting {
 		keep, dead := splitAskers(asks, now)
 		for _, ask := range dead {
-			a.notify(ask, CmdRegisterName, a.addr, name, ErrTimeout)
+			a.notify(ask, actormsg.CmdHarborRegisterName, a.addr, name, actormsg.ErrHarborTimeout)
 		}
 		if len(keep) == 0 {
 			delete(a.waiting, name)
@@ -843,7 +844,7 @@ func (a *Actor) dropExpired(now time.Time) {
 	for name, asks := range a.dropping {
 		keep, dead := splitAskers(asks, now)
 		for _, ask := range dead {
-			a.notify(ask, CmdUnregisterName, a.addr, name, ErrTimeout)
+			a.notify(ask, actormsg.CmdHarborUnregisterName, a.addr, name, actormsg.ErrHarborTimeout)
 		}
 		if len(keep) == 0 {
 			delete(a.dropping, name)
@@ -854,7 +855,7 @@ func (a *Actor) dropExpired(now time.Time) {
 	kept := a.queued[:0]
 	for _, q := range a.queued {
 		if a.expired(q.ask) {
-			a.notify(q.ask, CmdQueryAddr, "", q.name, ErrTimeout)
+			a.notify(q.ask, actormsg.CmdHarborQueryAddr, "", q.name, actormsg.ErrHarborTimeout)
 			continue
 		}
 		kept = append(kept, q)
@@ -863,7 +864,7 @@ func (a *Actor) dropExpired(now time.Time) {
 	keepAddr := a.addrAsks[:0]
 	for _, ask := range a.addrAsks {
 		if a.expired(ask) {
-			a.notify(ask, CmdSetAddr, a.addr, "", ErrTimeout)
+			a.notify(ask, actormsg.CmdHarborSetAddr, a.addr, "", actormsg.ErrHarborTimeout)
 			continue
 		}
 		keepAddr = append(keepAddr, ask)
@@ -880,27 +881,27 @@ func (a *Actor) dropExpired(now time.Time) {
 			continue
 		}
 		keep, dead := splitAskers(p.askers, now)
-		req := CmdRegisterName
+		req := actormsg.CmdHarborRegisterName
 		switch p.req {
-		case harbormgr.CmdUnregisterName:
-			req = CmdUnregisterName
-		case harbormgr.CmdQueryAddr:
-			req = CmdQueryAddr
-		case harbormgr.CmdRegisterAddr:
-			req = CmdSetAddr
+		case harborproto.CmdUnregisterName:
+			req = actormsg.CmdHarborUnregisterName
+		case harborproto.CmdQueryAddr:
+			req = actormsg.CmdHarborQueryAddr
+		case harborproto.CmdRegisterAddr:
+			req = actormsg.CmdHarborSetAddr
 		}
 		for _, ask := range dead {
-			a.notify(ask, req, a.addr, p.name, ErrTimeout)
+			a.notify(ask, req, a.addr, p.name, actormsg.ErrHarborTimeout)
 		}
 		p.askers = keep
-		if len(keep) > 0 || p.req == harbormgr.CmdRegisterAddr || p.req == harbormgr.CmdHeartbeat {
+		if len(keep) > 0 || p.req == harborproto.CmdRegisterAddr || p.req == harborproto.CmdHeartbeat {
 			continue
 		}
 		if len(dead) == 0 {
 			continue
 		}
 		delete(a.pending, id)
-		if p.req == harbormgr.CmdRegisterName {
+		if p.req == harborproto.CmdRegisterName {
 			delete(a.publishing, p.name)
 		}
 	}
@@ -925,10 +926,10 @@ func (a *Actor) holdDropping(name string, ask asker) bool {
 func (a *Actor) newAsk(e actor.Envelope, id uint64) asker {
 	ask := asker{from: e.From, fromName: e.FromName, id: id, deadline: time.Now().Add(requestTimeout)}
 	switch m := e.Msg.(type) {
-	case *RegisterName:
-		ask.done = m.done
-	case *UnregisterName:
-		ask.done = m.done
+	case *actormsg.HarborRegisterName:
+		ask.done = m.Done
+	case *actormsg.HarborUnregisterName:
+		ask.done = m.Done
 	}
 	return ask
 }
@@ -954,7 +955,7 @@ func (a *Actor) allocID() uint64 {
 }
 
 func (a *Actor) notify(ask asker, req, addr, name, errText string) {
-	msg := &Result{
+	msg := &actormsg.HarborResult{
 		ID:   ask.id,
 		Req:  req,
 		OK:   errText == "",
@@ -962,7 +963,7 @@ func (a *Actor) notify(ask asker, req, addr, name, errText string) {
 		Addr: addr,
 		Name: name,
 	}
-	msg.SetCmd(CmdResult)
+	msg.SetCmd(actormsg.CmdHarborResult)
 	if ask.done != nil {
 		select {
 		case ask.done <- *msg:
@@ -989,7 +990,44 @@ func (a *Actor) notify(ask asker, req, addr, name, errText string) {
 
 func errText(err string) string {
 	if err == "" {
-		return harbormgr.ErrUnknown
+		return harborproto.ErrUnknown
 	}
 	return err
+}
+
+func (a *Actor) RegisterCmds() error {
+	if err := a.RegisterCmd(actormsg.CmdHarborHello, func() actor.MessageInterface { return &actormsg.HarborHello{} }, a.onHello); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborRegisterName, func() actor.MessageInterface { return &actormsg.HarborRegisterName{} }, a.onRegisterName); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborUnregisterName, func() actor.MessageInterface { return &actormsg.HarborUnregisterName{} }, a.onUnregisterName); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborQueryAddr, func() actor.MessageInterface { return &actormsg.HarborQueryAddr{} }, a.onQueryAddr); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborSetAddr, func() actor.MessageInterface { return &actormsg.HarborSetAddr{} }, a.onSetAddr); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborMgrResult, func() actor.MessageInterface { return &actormsg.HarborMgrResult{} }, a.onMgrResult); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborBeat, func() actor.MessageInterface { return &actormsg.HarborBeat{} }, a.onBeat); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborExpire, func() actor.MessageInterface { return &actormsg.HarborExpire{} }, a.onExpire); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborLink, func() actor.MessageInterface { return &linkMsg{} }, a.onLink); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborPeer, func() actor.MessageInterface { return &peerEvent{} }, a.onPeer); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdHarborRemoteSend, func() actor.MessageInterface { return &remoteSend{} }, a.onRemoteSend); err != nil {
+		return err
+	}
+	return a.RegisterCmd(actormsg.CmdHarborRemoteReply, func() actor.MessageInterface { return &remoteReply{} }, a.onRemoteReply)
 }

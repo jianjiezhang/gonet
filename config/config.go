@@ -27,6 +27,12 @@ type Config struct {
 	RedisPassword string `toml:"redis_password"`
 	RedisDB       int    `toml:"redis_db"`
 	Center        bool   `toml:"center"`
+	Guild         bool   `toml:"guild"`
+	Idgen         bool   `toml:"idgen"`
+	Friend        bool   `toml:"friend"`
+	Match         bool   `toml:"match"`
+	Onlinemgr     bool   `toml:"onlinemgr"`
+	Role          bool   `toml:"role"`
 	HarborMgrPort int    `toml:"harbormgr_port"`
 	HarborPort    int    `toml:"harbor_port"`
 	WebHost       string `toml:"web_host"`
@@ -242,12 +248,10 @@ func parseTOML(s string) (Config, error) {
 				return Config{}, fmt.Errorf("config: redis_db 无效")
 			}
 			cfg.RedisDB = n
-		case "center":
-			on, err := strconv.ParseBool(val)
-			if err != nil {
-				return Config{}, fmt.Errorf("config: center 无效")
+		case "center", "guild", "idgen", "friend", "match", "onlinemgr", "role":
+			if err := applyBool(&cfg, key, val); err != nil {
+				return Config{}, err
 			}
-			cfg.Center = on
 		case "harbormgr_port":
 			n, err := strconv.Atoi(val)
 			if err != nil || n <= 0 || n > 65535 {
@@ -271,6 +275,32 @@ func parseTOML(s string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func applyBool(cfg *Config, key, val string) error {
+	on, err := strconv.ParseBool(val)
+	if err != nil {
+		return fmt.Errorf("config: %s 无效", key)
+	}
+	switch key {
+	case "center":
+		cfg.Center = on
+	case "guild":
+		cfg.Guild = on
+	case "idgen":
+		cfg.Idgen = on
+	case "friend":
+		cfg.Friend = on
+	case "match":
+		cfg.Match = on
+	case "onlinemgr":
+		cfg.Onlinemgr = on
+	case "role":
+		cfg.Role = on
+	default:
+		return fmt.Errorf("config: %s 无效", key)
+	}
+	return nil
 }
 
 func unquote(v string) string {

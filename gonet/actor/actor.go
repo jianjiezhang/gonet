@@ -330,7 +330,6 @@ func (a *actor) post(env Envelope) error {
 }
 
 func (a *actor) run() {
-	defer bindLogPID(a.pid)()
 	for {
 		e, ok := a.recv()
 		if !ok {

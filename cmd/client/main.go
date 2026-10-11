@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"game/lib/net"
-	"game/service/room"
+	gamenet "game/lib/net"
+	"game/services/room"
 	"protocol/client"
 )
 
@@ -261,7 +261,7 @@ func readLoop(conn net.Conn, roleID string) {
 	var snakes localSnakes
 	snakes.roleID = roleID
 	for {
-		msg, err := gamenet.ReadMsg(conn)
+		msg, err := gamenet.ReadMsg(conn, nil)
 		if err != nil {
 			if err != io.EOF {
 				slog.Error("read", "err", err)

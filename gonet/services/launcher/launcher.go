@@ -4,6 +4,8 @@ import (
 	"log/slog"
 
 	"gonet"
+
+	"gonet/services/internal/actormsg"
 )
 
 // Name 是本进程 launcher 的别名。Bind 之前为空。
@@ -45,7 +47,7 @@ func (a *Actor) onPing(e gonet.Envelope) {
 }
 
 func (a *Actor) onNewService(e gonet.Envelope) {
-	m, ok := e.Msg.(*newServiceMsg)
+	m, ok := e.Msg.(*actormsg.LauncherNewService)
 	if !ok || m.Impl == nil {
 		e.Reply(ServiceResult{Err: gonet.ErrNilActor})
 		return
@@ -84,4 +86,14 @@ func (a *Actor) onCallResponse(e gonet.Envelope) {
 	}
 	slog.Info("newservice", "pid", p.pid, "name", p.name)
 	p.reply.Reply(ServiceResult{PID: p.pid})
+}
+
+func (a *Actor) RegisterCmds() error {
+	if err := gonet.RegisterCmd(a, actormsg.CmdLauncherPing, func() gonet.MessageInterface { return &actormsg.LauncherPing{} }, a.onPing); err != nil {
+		return err
+	}
+	if err := gonet.RegisterCmd(a, gonet.CmdResponse, func() gonet.MessageInterface { return &gonet.CallResponse{} }, a.onCallResponse); err != nil {
+		return err
+	}
+	return gonet.RegisterCmd(a, actormsg.CmdLauncherNewService, func() gonet.MessageInterface { return &actormsg.LauncherNewService{} }, a.onNewService)
 }

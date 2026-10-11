@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 var errDown = errors.New("harbor: harbormgr 未连接")
@@ -20,14 +21,14 @@ type endpoint struct {
 	conn net.Conn
 }
 
-func (e *endpoint) WriteFrame(f proto.Frame) error {
+func (e *endpoint) WriteFrame(f harborproto.Frame) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.conn == nil {
 		return errDown
 	}
 	_ = e.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	return proto.Write(e.conn, f)
+	return harborproto.Write(e.conn, f)
 }
 
 func (e *endpoint) Close() {
@@ -43,7 +44,7 @@ type linkMsg struct {
 	actor.BaseMessage
 	up  bool
 	ep  *endpoint
-	out chan proto.Frame
+	out chan harborproto.Frame
 }
 
 func (a *Actor) connLoop() {
@@ -91,7 +92,7 @@ func (a *Actor) stopped() bool {
 
 func (a *Actor) serveConn(pid uint64, conn net.Conn) {
 	ep := &endpoint{conn: conn}
-	out := make(chan proto.Frame, 64)
+	out := make(chan harborproto.Frame, 64)
 	quit := make(chan struct{})
 	defer close(quit)
 	defer ep.Close()
@@ -99,11 +100,11 @@ func (a *Actor) serveConn(pid uint64, conn net.Conn) {
 
 	postLink(pid, true, ep, out)
 
-	reads := make(chan proto.Frame, 8)
+	reads := make(chan harborproto.Frame, 8)
 	go func() {
 		defer close(reads)
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				return
 			}
@@ -169,16 +170,16 @@ func (a *Actor) requeuePending() {
 			continue
 		}
 		switch p.req {
-		case harbormgr.CmdRegisterName:
+		case harborproto.CmdRegisterName:
 			delete(a.publishing, p.name)
 			a.waiting[p.name] = append(a.waiting[p.name], p.askers...)
-		case harbormgr.CmdUnregisterName:
+		case harborproto.CmdUnregisterName:
 			a.dropping[p.name] = append(a.dropping[p.name], p.askers...)
-		case harbormgr.CmdQueryAddr:
+		case harborproto.CmdQueryAddr:
 			for _, ask := range p.askers {
 				a.enqueueQuery(ask, p.name, true)
 			}
-		case harbormgr.CmdRegisterAddr:
+		case harborproto.CmdRegisterAddr:
 			a.addrAsks = append(a.addrAsks, p.askers...)
 		}
 	}
@@ -189,7 +190,7 @@ func (a *Actor) unregisterRemote() {
 		return
 	}
 	id := a.allocID()
-	f, err := proto.Pack(proto.CmdUnregisterAddr, &proto.UnregisterAddr{ID: id, NodeID: a.nodeID, Addr: a.addr})
+	f, err := harborproto.Pack(harborproto.CmdUnregisterAddr, &harborproto.UnregisterAddr{ID: id, NodeID: a.nodeID, Addr: a.addr})
 	if err != nil {
 		slog.Warn("harbor: 下线地址失败", "addr", a.addr, "err", err)
 		return
@@ -227,7 +228,7 @@ func (a *Actor) sendMgr(cmd uint16, payload any) error {
 	if a.out == nil {
 		return errDown
 	}
-	f, err := proto.Pack(cmd, payload)
+	f, err := harborproto.Pack(cmd, payload)
 	if err != nil {
 		return err
 	}
@@ -240,23 +241,23 @@ func (a *Actor) sendMgr(cmd uint16, payload any) error {
 	}
 }
 
-func postLink(pid uint64, up bool, ep *endpoint, out chan proto.Frame) {
+func postLink(pid uint64, up bool, ep *endpoint, out chan harborproto.Frame) {
 	msg := &linkMsg{up: up, ep: ep, out: out}
-	msg.SetCmd(cmdLink)
+	msg.SetCmd(actormsg.CmdHarborLink)
 	post(pid, msg)
 }
 
-func postResult(pid uint64, f proto.Frame) {
+func postResult(pid uint64, f harborproto.Frame) {
 	body, ok := f.Body()
 	if !ok {
 		return
 	}
-	res, ok := body.(*proto.Result)
+	res, ok := body.(*harborproto.Result)
 	if !ok {
 		return
 	}
-	msg := &harbormgr.Result{Env: *res}
-	msg.SetCmd(harbormgr.CmdKey(harbormgr.CmdResult))
+	msg := &actormsg.HarborMgrResult{Env: *res}
+	msg.SetCmd(actormsg.CmdHarborMgrResult)
 	post(pid, msg)
 }
 

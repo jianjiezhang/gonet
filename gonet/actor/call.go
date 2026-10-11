@@ -22,10 +22,6 @@ var (
 	nextCallSession atomic.Uint64
 )
 
-func init() {
-	_ = RegisterMsg(CmdResponse, func() MessageInterface { return &CallResponse{} })
-}
-
 // CallResponse 投进调用方 mailbox。Value 是对方 Reply 的值；Err 是超时或对方已死。
 type CallResponse struct {
 	BaseMessage
@@ -135,15 +131,11 @@ func (a *actor) rejectMailboxCalls() {
 	for {
 		select {
 		case e := <-a.mailbox:
-			failAsyncCall(e, ErrDead)
+			failEnvelopeCall(e, ErrDead)
 		default:
 			return
 		}
 	}
-}
-
-func failAsyncCall(e Envelope, err error) {
-	replyCallFailure(e, err)
 }
 
 func replyCallFailure(e Envelope, err error) {
@@ -162,11 +154,9 @@ func deliverCallResponse(to, session uint64, v any, err error) {
 	if a == nil {
 		return
 	}
-	tid, ok := a.calls.detach(session)
-	if !ok {
+	if !a.calls.take(session) {
 		return
 	}
-	stopScheduled(tid)
 	msg := &CallResponse{Session: session, Value: v, Err: err}
 	msg.SetCmd(CmdResponse)
 	if postErr := a.post(Envelope{Msg: msg, memory: true}); postErr != nil {
@@ -201,6 +191,17 @@ func CallMemoryName(from uint64, name string, d time.Duration, msg MessageInterf
 	return callNameFromAsync(from, name, d, msg, true)
 }
 
+// remoteCallErr 名字不在本进程时的结论。没有跨服通路视为别名不存在；memory 不能出进程。
+func remoteCallErr(memory bool) error {
+	if !callReady() {
+		return ErrUnknownAlias
+	}
+	if memory {
+		return ErrRemoteMemory
+	}
+	return nil
+}
+
 func callNameFromAsync(from uint64, name string, d time.Duration, msg MessageInterface, memory bool) (uint64, error) {
 	if name == "" {
 		return 0, ErrInvalidAlias
@@ -208,14 +209,8 @@ func callNameFromAsync(from uint64, name string, d time.Duration, msg MessageInt
 	if a := actorRegistry.getByAlias(name); a != nil {
 		return callOnAsync(from, a, d, msg, memory)
 	}
-	if memory {
-		if !callReady() {
-			return 0, ErrUnknownAlias
-		}
-		return 0, ErrRemoteMemory
-	}
-	if !callReady() {
-		return 0, ErrUnknownAlias
+	if err := remoteCallErr(memory); err != nil {
+		return 0, err
 	}
 	if from == 0 {
 		return 0, ErrNoCaller
@@ -323,7 +318,7 @@ func trackCaller(caller *actor, from uint64, d time.Duration) (uint64, error) {
 }
 
 func armCallTimeout(caller *actor, from, session uint64, d time.Duration) error {
-	if d <= 0 || caller == nil {
+	if d <= 0 {
 		return nil
 	}
 	timeoutMsg := &callTimeoutMsg{Session: session}
@@ -455,14 +450,8 @@ func suspendNameFrom(ctx context.Context, from uint64, name string, msg MessageI
 	if a := actorRegistry.getByAlias(name); a != nil {
 		return suspendOn(ctx, from, a, msg, memory)
 	}
-	if memory {
-		if !callReady() {
-			return nil, ErrUnknownAlias
-		}
-		return nil, ErrRemoteMemory
-	}
-	if !callReady() {
-		return nil, ErrUnknownAlias
+	if err := remoteCallErr(memory); err != nil {
+		return nil, err
 	}
 	out, err := prepareOutgoing(msg, false)
 	if err != nil {
