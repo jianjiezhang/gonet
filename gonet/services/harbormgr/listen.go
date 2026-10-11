@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 var connSeq uint64
@@ -50,16 +52,16 @@ func serveConn(pid uint64, conn net.Conn) {
 	token := atomic.AddUint64(&connSeq, 1)
 	defer conn.Close()
 	defer func() {
-		msg := &unbindMsg{token: token}
-		msg.SetCmd(CmdKey(CmdUnbind))
+		msg := &actormsg.HarbormgrUnbind{Token: token}
+		msg.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnbind))
 		_ = actor.SendMemory(pid, msg)
 	}()
 	for {
-		f, err := proto.Read(conn)
+		f, err := harborproto.Read(conn)
 		if err != nil {
 			return
 		}
-		back := make(chan Result, 1)
+		back := make(chan actormsg.HarbormgrResult, 1)
 		msg, ok := frameToMsg(f, token, back)
 		if !ok {
 			if err := writeInvalid(conn, f.Cmd); err != nil {
@@ -73,7 +75,7 @@ func serveConn(pid uint64, conn net.Conn) {
 		}
 		select {
 		case resp := <-back:
-			if err := proto.Write(conn, resultFrame(resp)); err != nil {
+			if err := harborproto.Write(conn, resultFrame(resp)); err != nil {
 				return
 			}
 		case <-time.After(3 * time.Second):
@@ -83,37 +85,37 @@ func serveConn(pid uint64, conn net.Conn) {
 	}
 }
 
-func frameToMsg(f proto.Frame, token uint64, back chan Result) (actor.MessageInterface, bool) {
+func frameToMsg(f harborproto.Frame, token uint64, back chan actormsg.HarbormgrResult) (actor.MessageInterface, bool) {
 	body, ok := f.Body()
 	if !ok {
 		return nil, false
 	}
-	wire := fromConn{token: token, back: back}
+	wire := actormsg.HarbormgrFromConn{Token: token, Back: back}
 	var msg actor.MessageInterface
 	switch m := body.(type) {
-	case *proto.RegisterAddr:
-		out := &RegisterAddr{RegisterAddr: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.RegisterAddr:
+		out := &actormsg.HarbormgrRegisterAddr{RegisterAddr: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
-	case *proto.RegisterName:
-		out := &RegisterName{RegisterName: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.RegisterName:
+		out := &actormsg.HarbormgrRegisterName{RegisterName: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
-	case *proto.Heartbeat:
-		out := &Heartbeat{Heartbeat: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.Heartbeat:
+		out := &actormsg.HarbormgrHeartbeat{Heartbeat: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
-	case *proto.QueryAddr:
-		out := &QueryAddr{QueryAddr: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.QueryAddr:
+		out := &actormsg.HarbormgrQueryAddr{QueryAddr: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
-	case *proto.UnregisterName:
-		out := &UnregisterName{UnregisterName: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.UnregisterName:
+		out := &actormsg.HarbormgrUnregisterName{UnregisterName: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
-	case *proto.UnregisterAddr:
-		out := &UnregisterAddr{UnregisterAddr: *m, fromConn: wire}
-		out.SetCmd(CmdKey(f.Cmd))
+	case *harborproto.UnregisterAddr:
+		out := &actormsg.HarbormgrUnregisterAddr{UnregisterAddr: *m, HarbormgrFromConn: wire}
+		out.SetCmd(actormsg.CmdKey(f.Cmd))
 		msg = out
 	default:
 		return nil, false
@@ -121,22 +123,22 @@ func frameToMsg(f proto.Frame, token uint64, back chan Result) (actor.MessageInt
 	return msg, true
 }
 
-func resultFrame(m Result) proto.Frame {
-	f, err := proto.Pack(proto.CmdResult, &m.Env)
+func resultFrame(m actormsg.HarbormgrResult) harborproto.Frame {
+	f, err := harborproto.Pack(harborproto.CmdResult, &m.Env)
 	if err != nil {
-		return proto.Frame{Cmd: proto.CmdResult}
+		return harborproto.Frame{Cmd: harborproto.CmdResult}
 	}
 	return f
 }
 
 func writeInvalid(conn net.Conn, cmd uint16) error {
-	res, err := proto.NewResult(cmd, &proto.Status{Err: proto.ErrInvalid})
+	res, err := harborproto.NewResult(cmd, &harborproto.Status{Err: harborproto.ErrInvalid})
 	if err != nil {
-		res = proto.Result{Cmd: cmd}
+		res = harborproto.Result{Cmd: cmd}
 	}
-	f, err := proto.Pack(proto.CmdResult, &res)
+	f, err := harborproto.Pack(harborproto.CmdResult, &res)
 	if err != nil {
 		return err
 	}
-	return proto.Write(conn, f)
+	return harborproto.Write(conn, f)
 }

@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 // Name 是本进程 harbormgr 的别名。UseNode 之前为空，之后直接是 .harbormgr_节点编号。
@@ -69,7 +71,7 @@ type Actor struct {
 // seqJob 是一次要占编号的地址登记。node 为 0 表示新领编号，否则是认回这个编号。
 type seqJob struct {
 	e    actor.Envelope
-	m    *RegisterAddr
+	m    *actormsg.HarbormgrRegisterAddr
 	node uint64
 }
 
@@ -179,12 +181,12 @@ func (a *Actor) onHello(e actor.Envelope) {
 }
 
 func (a *Actor) onRegisterAddr(e actor.Envelope) {
-	m, ok := e.Msg.(*RegisterAddr)
+	m, ok := e.Msg.(*actormsg.HarbormgrRegisterAddr)
 	if !ok {
 		return
 	}
 	if m.Addr == "" {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrInvalid)})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid)})
 		return
 	}
 	if m.NodeID == 0 {
@@ -196,12 +198,12 @@ func (a *Actor) onRegisterAddr(e actor.Envelope) {
 		a.reclaimExpired(e, m)
 		return
 	}
-	if book.token != 0 && book.token != m.token {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: book.addr})
+	if book.token != 0 && book.token != m.Token {
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: book.addr})
 		return
 	}
 	if owner, exists := a.byAddr[m.Addr]; exists && owner != m.NodeID {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: m.Addr})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: m.Addr})
 		return
 	}
 	if book.addr != m.Addr {
@@ -210,39 +212,39 @@ func (a *Actor) onRegisterAddr(e actor.Envelope) {
 		a.byAddr[m.Addr] = m.NodeID
 		slog.Info("addr update", "node", m.NodeID, "addr", m.Addr)
 	}
-	book.token = m.token
+	book.token = m.Token
 	book.seen = time.Now()
-	a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
+	a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
 }
 
 // reclaimExpired 在目录里没有这条记录时，按 harbor 报上来的原编号重建。
 // 编号大于已发出的最大值时，先把最大值记下来再回复，避免新节点领走这个编号。
 // 地址已被别的节点占用则失败。
-func (a *Actor) reclaimExpired(e actor.Envelope, m *RegisterAddr) {
+func (a *Actor) reclaimExpired(e actor.Envelope, m *actormsg.HarbormgrRegisterAddr) {
 	if m.NodeID == 0 {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrUnknown), NodeID: m.NodeID, Addr: m.Addr})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrUnknown), NodeID: m.NodeID, Addr: m.Addr})
 		return
 	}
 	if owner, exists := a.byAddr[m.Addr]; exists && owner != m.NodeID {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: m.Addr})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: m.Addr})
 		return
 	}
 	a.enqueueSeq(seqJob{e: e, m: m, node: m.NodeID})
 }
 
-func (a *Actor) allocNode(e actor.Envelope, m *RegisterAddr) {
+func (a *Actor) allocNode(e actor.Envelope, m *actormsg.HarbormgrRegisterAddr) {
 	if owner, exists := a.byAddr[m.Addr]; exists {
 		book := a.byNode[owner]
 		// 旧 TCP 已断开且这次是新连接：删掉过期记录，按 harbor 当前状态重新登记。
 		// 进程内调用 token 为 0，活连接 token 非 0，这两种仍视为地址被占用。
-		if book != nil && book.token == 0 && m.token != 0 {
+		if book != nil && book.token == 0 && m.Token != 0 {
 			slog.Info("node replaced", "node", owner, "addr", book.addr)
 			a.dropNode(owner, book)
 		} else {
 			if book == nil {
 				delete(a.byAddr, m.Addr)
 			} else {
-				a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), Addr: m.Addr})
+				a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), Addr: m.Addr})
 				return
 			}
 		}
@@ -263,7 +265,7 @@ func (a *Actor) pumpSeq() {
 		if n == 0 {
 			a.seqQueue = a.seqQueue[1:]
 			slog.Error("harbormgr: 节点编号已用尽")
-			a.reply(job.e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(job.m.ID, ErrInvalid), Addr: job.m.Addr})
+			a.reply(job.e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(job.m.ID, actormsg.ErrHarbormgrInvalid), Addr: job.m.Addr})
 			continue
 		}
 		if !save || a.seq == nil {
@@ -319,8 +321,8 @@ func (a *Actor) persistSeq(pid uint64, seq NodeSeq, n uint64, stop <-chan struct
 		err := seq.Save(ctx, n)
 		cancel()
 		if err == nil {
-			msg := &seqSaved{node: n, ok: true}
-			msg.SetCmd(CmdKey(CmdSeq))
+			msg := &actormsg.HarbormgrSeq{Node: n, OK: true}
+			msg.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdSeq))
 			if err := actor.SendMemory(pid, msg); err != nil {
 				select {
 				case <-stop:
@@ -341,15 +343,15 @@ func (a *Actor) persistSeq(pid uint64, seq NodeSeq, n uint64, stop <-chan struct
 }
 
 func (a *Actor) onSeqSaved(e actor.Envelope) {
-	m, ok := e.Msg.(*seqSaved)
-	if !ok || !m.ok || !a.seqBusy || m.node != a.seqSaving || len(a.seqQueue) == 0 {
+	m, ok := e.Msg.(*actormsg.HarbormgrSeq)
+	if !ok || !m.OK || !a.seqBusy || m.Node != a.seqSaving || len(a.seqQueue) == 0 {
 		return
 	}
 	a.seqBusy = false
 	job := a.seqQueue[0]
 	a.seqQueue = a.seqQueue[1:]
-	a.nextNode = m.node
-	a.commitSeq(job, m.node)
+	a.nextNode = m.Node
+	a.commitSeq(job, m.Node)
 	a.pumpSeq()
 }
 
@@ -361,21 +363,21 @@ func (a *Actor) commitSeq(job seqJob, id uint64) {
 	a.commitReclaim(job.e, job.m)
 }
 
-func (a *Actor) commitNew(e actor.Envelope, m *RegisterAddr, id uint64) {
+func (a *Actor) commitNew(e actor.Envelope, m *actormsg.HarbormgrRegisterAddr, id uint64) {
 	if owner, exists := a.byAddr[m.Addr]; exists {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), Addr: m.Addr, NodeID: owner})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), Addr: m.Addr, NodeID: owner})
 		return
 	}
 	book := &nodeBook{
 		addr:  m.Addr,
 		names: make(map[string]struct{}),
 		seen:  time.Now(),
-		token: m.token,
+		token: m.Token,
 	}
 	a.byNode[id] = book
 	a.byAddr[m.Addr] = id
 	slog.Info("node register", "node", id, "addr", m.Addr)
-	a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{
+	a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{
 		Status: done(m.ID, ""),
 		NodeID: id,
 		Addr:   m.Addr,
@@ -383,25 +385,25 @@ func (a *Actor) commitNew(e actor.Envelope, m *RegisterAddr, id uint64) {
 	})
 }
 
-func (a *Actor) commitReclaim(e actor.Envelope, m *RegisterAddr) {
+func (a *Actor) commitReclaim(e actor.Envelope, m *actormsg.HarbormgrRegisterAddr) {
 	if book := a.byNode[m.NodeID]; book != nil {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: book.addr})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: book.addr})
 		return
 	}
 	if owner, exists := a.byAddr[m.Addr]; exists && owner != m.NodeID {
-		a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: m.Addr})
+		a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: m.Addr})
 		return
 	}
 	book := &nodeBook{
 		addr:  m.Addr,
 		names: make(map[string]struct{}),
 		seen:  time.Now(),
-		token: m.token,
+		token: m.Token,
 	}
 	a.byNode[m.NodeID] = book
 	a.byAddr[m.Addr] = m.NodeID
 	slog.Info("node reclaim", "node", m.NodeID, "addr", m.Addr)
-	a.reply(e, CmdRegisterAddr, &proto.RegisterAddrResult{
+	a.reply(e, actormsg.HarbormgrCmdRegisterAddr, &harborproto.RegisterAddrResult{
 		Status: done(m.ID, ""),
 		NodeID: m.NodeID,
 		Addr:   m.Addr,
@@ -410,25 +412,25 @@ func (a *Actor) commitReclaim(e actor.Envelope, m *RegisterAddr) {
 }
 
 func (a *Actor) onRegisterName(e actor.Envelope) {
-	m, ok := e.Msg.(*RegisterName)
+	m, ok := e.Msg.(*actormsg.HarbormgrRegisterName)
 	if !ok {
 		return
 	}
 	if m.NodeID == 0 || m.Addr == "" || m.Name == "" {
-		a.reply(e, CmdRegisterName, &proto.RegisterNameResult{Status: done(m.ID, ErrInvalid), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdRegisterName, &harborproto.RegisterNameResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
 		return
 	}
-	book, errText := a.owned(m.NodeID, m.token)
+	book, errText := a.owned(m.NodeID, m.Token)
 	if errText != "" {
 		addr := m.Addr
 		if book != nil {
 			addr = book.addr
 		}
-		a.reply(e, CmdRegisterName, &proto.RegisterNameResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdRegisterName, &harborproto.RegisterNameResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr, Name: m.Name})
 		return
 	}
 	if book.addr != m.Addr {
-		a.reply(e, CmdRegisterName, &proto.RegisterNameResult{Status: done(m.ID, ErrUnknown), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdRegisterName, &harborproto.RegisterNameResult{Status: done(m.ID, actormsg.ErrHarbormgrUnknown), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
 		return
 	}
 	if cur, exists := a.byName[m.Name]; exists && cur != m.NodeID {
@@ -436,110 +438,110 @@ func (a *Actor) onRegisterName(e actor.Envelope) {
 		if owner := a.byNode[cur]; owner != nil {
 			addr = owner.addr
 		}
-		a.reply(e, CmdRegisterName, &proto.RegisterNameResult{Status: done(m.ID, ErrTaken), NodeID: m.NodeID, Addr: addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdRegisterName, &harborproto.RegisterNameResult{Status: done(m.ID, actormsg.ErrHarbormgrTaken), NodeID: m.NodeID, Addr: addr, Name: m.Name})
 		return
 	}
 	a.byName[m.Name] = m.NodeID
 	book.names[m.Name] = struct{}{}
 	book.seen = time.Now()
 	slog.Info("name register", "name", m.Name, "node", m.NodeID, "addr", m.Addr)
-	a.reply(e, CmdRegisterName, &proto.RegisterNameResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
+	a.reply(e, actormsg.HarbormgrCmdRegisterName, &harborproto.RegisterNameResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
 }
 
 func (a *Actor) onHeartbeat(e actor.Envelope) {
-	m, ok := e.Msg.(*Heartbeat)
+	m, ok := e.Msg.(*actormsg.HarbormgrHeartbeat)
 	if !ok {
 		return
 	}
 	if m.NodeID == 0 {
-		a.reply(e, CmdHeartbeat, &proto.HeartbeatResult{Status: done(m.ID, ErrInvalid)})
+		a.reply(e, actormsg.HarbormgrCmdHeartbeat, &harborproto.HeartbeatResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid)})
 		return
 	}
-	book, errText := a.owned(m.NodeID, m.token)
+	book, errText := a.owned(m.NodeID, m.Token)
 	if errText != "" {
 		addr := m.Addr
 		if book != nil {
 			addr = book.addr
 		}
-		a.reply(e, CmdHeartbeat, &proto.HeartbeatResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr})
+		a.reply(e, actormsg.HarbormgrCmdHeartbeat, &harborproto.HeartbeatResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr})
 		return
 	}
 	book.seen = time.Now()
-	a.reply(e, CmdHeartbeat, &proto.HeartbeatResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
+	a.reply(e, actormsg.HarbormgrCmdHeartbeat, &harborproto.HeartbeatResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
 }
 
 func (a *Actor) onQueryAddr(e actor.Envelope) {
-	m, ok := e.Msg.(*QueryAddr)
+	m, ok := e.Msg.(*actormsg.HarbormgrQueryAddr)
 	if !ok {
 		return
 	}
 	if m.Name == "" {
-		a.reply(e, CmdQueryAddr, &proto.QueryAddrResult{Status: done(m.ID, ErrInvalid)})
+		a.reply(e, actormsg.HarbormgrCmdQueryAddr, &harborproto.QueryAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid)})
 		return
 	}
 	node, exists := a.byName[m.Name]
 	book := a.byNode[node]
 	if !exists || book == nil {
-		a.reply(e, CmdQueryAddr, &proto.QueryAddrResult{Status: done(m.ID, ErrUnknown), Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdQueryAddr, &harborproto.QueryAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrUnknown), Name: m.Name})
 		return
 	}
-	a.reply(e, CmdQueryAddr, &proto.QueryAddrResult{Status: done(m.ID, ""), NodeID: node, Addr: book.addr, Name: m.Name})
+	a.reply(e, actormsg.HarbormgrCmdQueryAddr, &harborproto.QueryAddrResult{Status: done(m.ID, ""), NodeID: node, Addr: book.addr, Name: m.Name})
 }
 
 func (a *Actor) onUnregisterName(e actor.Envelope) {
-	m, ok := e.Msg.(*UnregisterName)
+	m, ok := e.Msg.(*actormsg.HarbormgrUnregisterName)
 	if !ok {
 		return
 	}
 	if m.NodeID == 0 || m.Addr == "" || m.Name == "" {
-		a.reply(e, CmdUnregisterName, &proto.UnregisterNameResult{Status: done(m.ID, ErrInvalid), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdUnregisterName, &harborproto.UnregisterNameResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid), NodeID: m.NodeID, Addr: m.Addr, Name: m.Name})
 		return
 	}
-	book, errText := a.owned(m.NodeID, m.token)
+	book, errText := a.owned(m.NodeID, m.Token)
 	if errText != "" {
 		addr := m.Addr
 		if book != nil {
 			addr = book.addr
 		}
-		a.reply(e, CmdUnregisterName, &proto.UnregisterNameResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdUnregisterName, &harborproto.UnregisterNameResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr, Name: m.Name})
 		return
 	}
 	if a.byName[m.Name] != m.NodeID {
-		a.reply(e, CmdUnregisterName, &proto.UnregisterNameResult{Status: done(m.ID, ErrUnknown), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
+		a.reply(e, actormsg.HarbormgrCmdUnregisterName, &harborproto.UnregisterNameResult{Status: done(m.ID, actormsg.ErrHarbormgrUnknown), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
 		return
 	}
 	delete(a.byName, m.Name)
 	delete(book.names, m.Name)
 	book.seen = time.Now()
 	slog.Info("name unregister", "name", m.Name, "node", m.NodeID)
-	a.reply(e, CmdUnregisterName, &proto.UnregisterNameResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
+	a.reply(e, actormsg.HarbormgrCmdUnregisterName, &harborproto.UnregisterNameResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr, Name: m.Name})
 }
 
 func (a *Actor) onUnregisterAddr(e actor.Envelope) {
-	m, ok := e.Msg.(*UnregisterAddr)
+	m, ok := e.Msg.(*actormsg.HarbormgrUnregisterAddr)
 	if !ok {
 		return
 	}
 	if m.NodeID == 0 {
-		a.reply(e, CmdUnregisterAddr, &proto.UnregisterAddrResult{Status: done(m.ID, ErrInvalid), Addr: m.Addr})
+		a.reply(e, actormsg.HarbormgrCmdUnregisterAddr, &harborproto.UnregisterAddrResult{Status: done(m.ID, actormsg.ErrHarbormgrInvalid), Addr: m.Addr})
 		return
 	}
-	book, errText := a.owned(m.NodeID, m.token)
+	book, errText := a.owned(m.NodeID, m.Token)
 	if errText != "" {
 		addr := m.Addr
 		if book != nil {
 			addr = book.addr
 		}
-		a.reply(e, CmdUnregisterAddr, &proto.UnregisterAddrResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr})
+		a.reply(e, actormsg.HarbormgrCmdUnregisterAddr, &harborproto.UnregisterAddrResult{Status: done(m.ID, errText), NodeID: m.NodeID, Addr: addr})
 		return
 	}
 	a.dropNode(m.NodeID, book)
 	slog.Info("node unregister", "node", m.NodeID, "addr", book.addr)
-	a.reply(e, CmdUnregisterAddr, &proto.UnregisterAddrResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
+	a.reply(e, actormsg.HarbormgrCmdUnregisterAddr, &harborproto.UnregisterAddrResult{Status: done(m.ID, ""), NodeID: m.NodeID, Addr: book.addr})
 }
 
 func (a *Actor) onSweep(e actor.Envelope) {
-	if _, ok := e.Msg.(*sweepMsg); !ok {
+	if _, ok := e.Msg.(*actormsg.HarbormgrSweep); !ok {
 		return
 	}
 	now := time.Now()
@@ -557,12 +559,12 @@ func (a *Actor) onSweep(e actor.Envelope) {
 }
 
 func (a *Actor) onUnbind(e actor.Envelope) {
-	m, ok := e.Msg.(*unbindMsg)
-	if !ok || m.token == 0 {
+	m, ok := e.Msg.(*actormsg.HarbormgrUnbind)
+	if !ok || m.Token == 0 {
 		return
 	}
 	for _, book := range a.byNode {
-		if book.token == m.token {
+		if book.token == m.Token {
 			book.token = 0
 			return
 		}
@@ -573,10 +575,10 @@ func (a *Actor) onUnbind(e actor.Envelope) {
 func (a *Actor) owned(node, token uint64) (*nodeBook, string) {
 	book := a.byNode[node]
 	if book == nil {
-		return nil, ErrUnknown
+		return nil, actormsg.ErrHarbormgrUnknown
 	}
 	if book.token != token {
-		return book, ErrTaken
+		return book, actormsg.ErrHarbormgrTaken
 	}
 	return book, ""
 }
@@ -592,26 +594,28 @@ func (a *Actor) dropNode(id uint64, book *nodeBook) {
 }
 
 func (a *Actor) armSweep() error {
-	msg := &sweepMsg{}
-	msg.SetCmd(CmdKey(CmdSweep))
+	msg := &actormsg.HarbormgrSweep{}
+	msg.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdSweep))
 	_, err := a.Timeout(sweepEvery, msg)
 	return err
 }
 
-func done(id uint64, errText string) proto.Status {
-	return proto.Status{ID: id, OK: errText == "", Err: errText}
+func done(id uint64, errText string) harborproto.Status {
+	return harborproto.Status{ID: id, OK: errText == "", Err: errText}
 }
 
 func (a *Actor) reply(e actor.Envelope, cmd uint16, payload any) {
-	res, err := proto.NewResult(cmd, payload)
+	res, err := harborproto.NewResult(cmd, payload)
 	if err != nil {
 		slog.Warn("harbormgr: 回复编码失败", "cmd", cmd, "err", err)
 		return
 	}
-	msg := &Result{Env: res}
-	msg.SetCmd(CmdKey(CmdResult))
-	if src, ok := e.Msg.(interface{ takeBack() chan Result }); ok {
-		if back := src.takeBack(); back != nil {
+	msg := &actormsg.HarbormgrResult{Env: res}
+	msg.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdResult))
+	if src, ok := e.Msg.(interface {
+		TakeBack() chan actormsg.HarbormgrResult
+	}); ok {
+		if back := src.TakeBack(); back != nil {
 			select {
 			case back <- *msg:
 			default:
@@ -632,4 +636,35 @@ func (a *Actor) reply(e actor.Envelope, cmd uint16, payload any) {
 	if sendErr != nil {
 		slog.Warn("harbormgr: 结果投递失败", "cmd", cmd, "err", sendErr)
 	}
+}
+
+func (a *Actor) RegisterCmds() error {
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdHello), func() actor.MessageInterface { return &actormsg.HarbormgrHello{} }, a.onHello); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterAddr), func() actor.MessageInterface { return &actormsg.HarbormgrRegisterAddr{} }, a.onRegisterAddr); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterName), func() actor.MessageInterface { return &actormsg.HarbormgrRegisterName{} }, a.onRegisterName); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdHeartbeat), func() actor.MessageInterface { return &actormsg.HarbormgrHeartbeat{} }, a.onHeartbeat); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdQueryAddr), func() actor.MessageInterface { return &actormsg.HarbormgrQueryAddr{} }, a.onQueryAddr); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnregisterName), func() actor.MessageInterface { return &actormsg.HarbormgrUnregisterName{} }, a.onUnregisterName); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnregisterAddr), func() actor.MessageInterface { return &actormsg.HarbormgrUnregisterAddr{} }, a.onUnregisterAddr); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdSweep), func() actor.MessageInterface { return &actormsg.HarbormgrSweep{} }, a.onSweep); err != nil {
+		return err
+	}
+	if err := a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnbind), func() actor.MessageInterface { return &actormsg.HarbormgrUnbind{} }, a.onUnbind); err != nil {
+		return err
+	}
+	return a.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdSeq), func() actor.MessageInterface { return &actormsg.HarbormgrSeq{} }, a.onSeqSaved)
 }

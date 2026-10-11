@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"gonet/mysql"
+	"gonet/components/mysql"
 )
 
 func (s *mysqlStore) HasRole(ctx context.Context, roleid string) (bool, error) {

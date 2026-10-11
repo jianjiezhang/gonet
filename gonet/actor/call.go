@@ -19,13 +19,8 @@ var (
 	ErrNoCaller     = errors.New("gonet: 异步 Call 必须有调用方 actor")
 	ErrRemoteCaller = errors.New("gonet: 跨服 Call 的调用方要有别名")
 	ErrCallTimeout  = errors.New("gonet: Call 超时")
-	ErrSuspendSelf  = errors.New("gonet: 不能在自身 mailbox 协程里 SuspendCall 自己")
 	nextCallSession atomic.Uint64
 )
-
-func init() {
-	_ = RegisterMsg(CmdResponse, func() MessageInterface { return &CallResponse{} })
-}
 
 // CallResponse 投进调用方 mailbox。Value 是对方 Reply 的值；Err 是超时或对方已死。
 type CallResponse struct {
@@ -52,31 +47,55 @@ type callTimeoutMsg struct {
 
 func (m *callTimeoutMsg) Command() string { return cmdCallTimeout }
 
-func (a *actor) trackCall(session, timerID uint64) {
-	a.pendingMu.Lock()
-	if a.pending == nil {
-		a.pending = make(map[uint64]uint64)
-	}
-	a.pending[session] = timerID
-	a.pendingMu.Unlock()
+// callSet 记下还没结束的异步 Call。session 映射到 timer id，0 表示没有超时。
+type callSet struct {
+	mu      sync.Mutex
+	pending map[uint64]uint64
 }
 
-func (a *actor) takeCall(session uint64) bool {
-	tid, ok := a.detachCall(session)
+func (s *callSet) track(session, timerID uint64) {
+	s.mu.Lock()
+	if s.pending == nil {
+		s.pending = make(map[uint64]uint64)
+	}
+	s.pending[session] = timerID
+	s.mu.Unlock()
+}
+
+func (s *callSet) take(session uint64) bool {
+	tid, ok := s.detach(session)
 	if ok {
 		stopScheduled(tid)
 	}
 	return ok
 }
 
-func (a *actor) detachCall(session uint64) (tid uint64, ok bool) {
-	a.pendingMu.Lock()
-	tid, ok = a.pending[session]
+func (s *callSet) detach(session uint64) (tid uint64, ok bool) {
+	s.mu.Lock()
+	tid, ok = s.pending[session]
 	if ok {
-		delete(a.pending, session)
+		delete(s.pending, session)
 	}
-	a.pendingMu.Unlock()
+	s.mu.Unlock()
 	return tid, ok
+}
+
+func (s *callSet) count() int {
+	s.mu.Lock()
+	n := len(s.pending)
+	s.mu.Unlock()
+	return n
+}
+
+// bindTimer 给已经 track 的 session 补上 timer。session 已结束时返回 false。
+func (s *callSet) bindTimer(session, timerID uint64) bool {
+	s.mu.Lock()
+	_, ok := s.pending[session]
+	if ok {
+		s.pending[session] = timerID
+	}
+	s.mu.Unlock()
+	return ok
 }
 
 func (a *actor) applyCallTimeout(e *Envelope) bool {
@@ -84,7 +103,7 @@ func (a *actor) applyCallTimeout(e *Envelope) bool {
 	if !ok {
 		return true
 	}
-	if !a.takeCall(t.Session) {
+	if !a.calls.take(t.Session) {
 		return false
 	}
 	noteCallTimeout(a)
@@ -112,15 +131,11 @@ func (a *actor) rejectMailboxCalls() {
 	for {
 		select {
 		case e := <-a.mailbox:
-			failAsyncCall(e, ErrDead)
+			failEnvelopeCall(e, ErrDead)
 		default:
 			return
 		}
 	}
-}
-
-func failAsyncCall(e Envelope, err error) {
-	replyCallFailure(e, err)
 }
 
 func replyCallFailure(e Envelope, err error) {
@@ -139,11 +154,9 @@ func deliverCallResponse(to, session uint64, v any, err error) {
 	if a == nil {
 		return
 	}
-	tid, ok := a.detachCall(session)
-	if !ok {
+	if !a.calls.take(session) {
 		return
 	}
-	stopScheduled(tid)
 	msg := &CallResponse{Session: session, Value: v, Err: err}
 	msg.SetCmd(CmdResponse)
 	if postErr := a.post(Envelope{Msg: msg, memory: true}); postErr != nil {
@@ -178,6 +191,17 @@ func CallMemoryName(from uint64, name string, d time.Duration, msg MessageInterf
 	return callNameFromAsync(from, name, d, msg, true)
 }
 
+// remoteCallErr 名字不在本进程时的结论。没有跨服通路视为别名不存在；memory 不能出进程。
+func remoteCallErr(memory bool) error {
+	if !callReady() {
+		return ErrUnknownAlias
+	}
+	if memory {
+		return ErrRemoteMemory
+	}
+	return nil
+}
+
 func callNameFromAsync(from uint64, name string, d time.Duration, msg MessageInterface, memory bool) (uint64, error) {
 	if name == "" {
 		return 0, ErrInvalidAlias
@@ -185,14 +209,8 @@ func callNameFromAsync(from uint64, name string, d time.Duration, msg MessageInt
 	if a := actorRegistry.getByAlias(name); a != nil {
 		return callOnAsync(from, a, d, msg, memory)
 	}
-	if memory {
-		if !callReady() {
-			return 0, ErrUnknownAlias
-		}
-		return 0, ErrRemoteMemory
-	}
-	if !callReady() {
-		return 0, ErrUnknownAlias
+	if err := remoteCallErr(memory); err != nil {
+		return 0, err
 	}
 	if from == 0 {
 		return 0, ErrNoCaller
@@ -221,11 +239,11 @@ func callNameFromAsync(from uint64, name string, d time.Duration, msg MessageInt
 		return 0, err
 	}
 	if err := forwardCallName(fromName, name, packed, session); err != nil {
-		caller.takeCall(session)
+		caller.calls.take(session)
 		return 0, err
 	}
 	if err := armCallTimeout(caller, from, session, d); err != nil {
-		caller.takeCall(session)
+		caller.calls.take(session)
 		return 0, err
 	}
 	return session, nil
@@ -277,7 +295,7 @@ func callOnAsync(from uint64, dest *actor, d time.Duration, msg MessageInterface
 	}
 	env := Envelope{From: from, FromName: aliasOf(from), Msg: out, memory: memory, session: session}
 	if err := dest.post(env); err != nil {
-		caller.takeCall(session)
+		caller.calls.take(session)
 		return 0, err
 	}
 	return session, nil
@@ -295,12 +313,12 @@ func trackCaller(caller *actor, from uint64, d time.Duration) (uint64, error) {
 			return 0, err
 		}
 	}
-	caller.trackCall(session, tid)
+	caller.calls.track(session, tid)
 	return session, nil
 }
 
 func armCallTimeout(caller *actor, from, session uint64, d time.Duration) error {
-	if d <= 0 || caller == nil {
+	if d <= 0 {
 		return nil
 	}
 	timeoutMsg := &callTimeoutMsg{Session: session}
@@ -309,13 +327,7 @@ func armCallTimeout(caller *actor, from, session uint64, d time.Duration) error 
 	if err != nil {
 		return err
 	}
-	caller.pendingMu.Lock()
-	_, ok := caller.pending[session]
-	if ok {
-		caller.pending[session] = tid
-	}
-	caller.pendingMu.Unlock()
-	if !ok {
+	if !caller.calls.bindTimer(session, tid) {
 		stopScheduled(tid)
 	}
 	return nil
@@ -332,14 +344,14 @@ func TrackSession(pid, session uint64) error {
 	if a == nil {
 		return ErrDead
 	}
-	a.trackCall(session, 0)
+	a.calls.track(session, 0)
 	return nil
 }
 
 // UntrackSession 取消 TrackSession。
 func UntrackSession(pid, session uint64) {
 	if a := actorRegistry.get(pid); a != nil {
-		a.takeCall(session)
+		a.calls.take(session)
 	}
 }
 
@@ -404,7 +416,8 @@ func deliverCallResponseName(name string, session uint64, v any, err error) {
 	slog.Error("gonet: Call 回复找不到调用方", "name", name, "session", session, "err", qerr)
 }
 
-// SuspendCall 阻塞当前协程直到 Reply、超时或对方死亡。不要在 Dispatch 里用。
+// SuspendCall 阻塞当前协程直到 Reply、超时或对方死亡。
+// 只给邮箱外面的协程用。邮箱协程里用 Call，对自己也一样。
 func SuspendCall(ctx context.Context, pid uint64, msg MessageInterface) (any, error) {
 	return suspendFrom(ctx, 0, pid, msg, false)
 }
@@ -437,14 +450,8 @@ func suspendNameFrom(ctx context.Context, from uint64, name string, msg MessageI
 	if a := actorRegistry.getByAlias(name); a != nil {
 		return suspendOn(ctx, from, a, msg, memory)
 	}
-	if memory {
-		if !callReady() {
-			return nil, ErrUnknownAlias
-		}
-		return nil, ErrRemoteMemory
-	}
-	if !callReady() {
-		return nil, ErrUnknownAlias
+	if err := remoteCallErr(memory); err != nil {
+		return nil, err
 	}
 	out, err := prepareOutgoing(msg, false)
 	if err != nil {
@@ -523,9 +530,6 @@ func suspendFrom(ctx context.Context, from, to uint64, msg MessageInterface, mem
 }
 
 func suspendOn(ctx context.Context, from uint64, a *actor, msg MessageInterface, memory bool) (any, error) {
-	if a.loopID.Load() == goid() {
-		return nil, ErrSuspendSelf
-	}
 	out, err := prepareOutgoing(msg, memory)
 	if err != nil {
 		return nil, err
@@ -543,7 +547,7 @@ func suspendOn(ctx context.Context, from uint64, a *actor, msg MessageInterface,
 		return v, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-a.done:
+	case <-a.life.done:
 		select {
 		case v := <-reply:
 			if f, ok := v.(callFail); ok {

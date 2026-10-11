@@ -100,9 +100,13 @@ func WriteMsg(w io.Writer, cmd string, payload any) error {
 	return packet.Write(w, id, b)
 }
 
-// ReadMsg 读一帧并得到业务消息。已登记的命令名会 Unpack；未登记则返回信封。
+// UnpackFunc 用命令名和 JSON 正文造出业务消息。nil 时 ReadMsg 只返回信封。
+type UnpackFunc func(cmd, data string) (gonet.MessageInterface, error)
+
+// ReadMsg 读一帧并得到业务消息。unpack 能解开的命令返回具体类型；
+// unpack 为 nil、该 actor 没登记，或命令未知时返回信封。
 // 帧错误原样返回；命令号或正文无法识别是 ErrCodec，连接不断。
-func ReadMsg(r io.Reader) (gonet.MessageInterface, error) {
+func ReadMsg(r io.Reader, unpack UnpackFunc) (gonet.MessageInterface, error) {
 	id, data, err := packet.Read(r)
 	if err != nil {
 		return nil, err
@@ -115,7 +119,12 @@ func ReadMsg(r io.Reader) (gonet.MessageInterface, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCodec, err)
 	}
-	out, err := gonet.Unpack(name, text)
+	if unpack == nil {
+		msg := &gonet.BaseMessage{Data: text}
+		msg.SetCmd(name)
+		return msg, nil
+	}
+	out, err := unpack(name, text)
 	if err == nil {
 		return out, nil
 	}

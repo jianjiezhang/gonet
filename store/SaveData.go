@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"gonet/mysql"
+	"gonet/components/mysql"
 )
 
 func (s *mysqlStore) CreateRole(ctx context.Context, roleid string) error {

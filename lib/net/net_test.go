@@ -23,7 +23,7 @@ func TestWriteReadLogin(t *testing.T) {
 	if binary.BigEndian.Uint16(raw[4:6]) != 1 {
 		t.Fatalf("cmd=%d", binary.BigEndian.Uint16(raw[4:6]))
 	}
-	msg, err := ReadMsg(&buf)
+	msg, err := ReadMsg(&buf, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestUnknownCmd(t *testing.T) {
 	if err := packet.Write(&buf, 99, []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadMsg(&buf)
+	_, err := ReadMsg(&buf, nil)
 	if !errors.Is(err, ErrCodec) {
 		t.Fatalf("read: %v", err)
 	}

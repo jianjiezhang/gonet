@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"gonet/mysql"
+	"gonet/components/mysql"
 )
 
 //go:embed game.sql

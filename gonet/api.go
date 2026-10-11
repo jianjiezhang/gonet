@@ -6,13 +6,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/monitor"
+	"gonet/services/monitor"
 	"gonet/timer"
 )
-
-func init() {
-	actor.InstallLogPrefix()
-}
 
 type ActorContextInterface = actor.ActorContextInterface
 type ActorContext = actor.ActorContext
@@ -48,7 +44,6 @@ var (
 	ErrNoCaller      = actor.ErrNoCaller
 	ErrRemoteCaller  = actor.ErrRemoteCaller
 	ErrCallTimeout   = actor.ErrCallTimeout
-	ErrSuspendSelf   = actor.ErrSuspendSelf
 	ErrDispatchPanic = actor.ErrDispatchPanic
 	ErrStopTimeout   = actor.ErrStopTimeout
 	ErrSystemCmd     = actor.ErrSystemCmd
@@ -186,13 +181,13 @@ func ClusterNode() uint64 {
 }
 
 func Stop() {
-	_ = monitor.StopListen()
+	_ = monitor.Stop()
 	actor.Stop()
 }
 
 // StopWait 停掉 debug 后停止所有 actor。d<=0 一直等；超时返回尚未结束的 pid。
 func StopWait(d time.Duration) []uint64 {
-	_ = monitor.StopListen()
+	_ = monitor.Stop()
 	return actor.StopWait(d)
 }
 
@@ -209,16 +204,6 @@ func Pack(cmd string, payload any) (*BaseMessage, error) {
 	return actor.Pack(cmd, payload)
 }
 
-// EnterService 让当前协程上的日志带上服务名。mailbox 协程在 run 里已经带上别名。
-// 旁路协程（玩家 readLoop、等登录）退出前要调用返回的函数。
-func EnterService(name string) func() {
-	return actor.EnterService(name)
-}
-
-func Unpack(cmd, data string) (MessageInterface, error) {
-	return actor.Unpack(cmd, data)
-}
-
 func Timeout(pid uint64, d time.Duration, msg MessageInterface) (TimerID, error) {
 	id, err := actor.Timeout(pid, d, msg)
 	return TimerID(id), err
@@ -233,9 +218,9 @@ func Monitor() Snapshot {
 }
 
 func ListenDebug(addr string) (string, error) {
-	return monitor.Listen(addr)
+	return monitor.Start(context.Background(), addr)
 }
 
 func StopDebug() error {
-	return monitor.StopListen()
+	return monitor.Stop()
 }

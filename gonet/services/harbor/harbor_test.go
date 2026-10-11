@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"gonet/actor"
+
 	"gonet/services/harbormgr"
-	"gonet/services/harbormgr/proto"
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 func TestHello(t *testing.T) {
@@ -29,7 +31,7 @@ func TestHello(t *testing.T) {
 		t.Fatal("second start")
 	}
 
-	msg, err := actor.Pack(CmdHello, struct{}{})
+	msg, err := actor.Pack(actormsg.CmdHarborHello, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,19 +46,19 @@ func TestHello(t *testing.T) {
 
 type client struct {
 	actor.ActorContext
-	harbor chan Result
-	mgr    chan harbormgr.Result
+	harbor chan actormsg.HarborResult
+	mgr    chan actormsg.HarbormgrResult
 }
 
 func (c *client) Init() error {
-	if err := c.RegisterCmd(CmdResult, func() actor.MessageInterface { return &Result{} }, c.onHarbor); err != nil {
+	if err := c.RegisterCmd(actormsg.CmdHarborResult, func() actor.MessageInterface { return &actormsg.HarborResult{} }, c.onHarbor); err != nil {
 		return err
 	}
-	return c.RegisterCmd(harbormgr.CmdKey(harbormgr.CmdResult), func() actor.MessageInterface { return &harbormgr.Result{} }, c.onMgr)
+	return c.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdResult), func() actor.MessageInterface { return &actormsg.HarbormgrResult{} }, c.onMgr)
 }
 
 func (c *client) onHarbor(e actor.Envelope) {
-	m, ok := e.Msg.(*Result)
+	m, ok := e.Msg.(*actormsg.HarborResult)
 	if !ok {
 		return
 	}
@@ -64,14 +66,14 @@ func (c *client) onHarbor(e actor.Envelope) {
 }
 
 func (c *client) onMgr(e actor.Envelope) {
-	m, ok := e.Msg.(*harbormgr.Result)
+	m, ok := e.Msg.(*actormsg.HarbormgrResult)
 	if !ok {
 		return
 	}
 	c.mgr <- *m
 }
 
-func (c *client) ask(t *testing.T, msg actor.MessageInterface) Result {
+func (c *client) ask(t *testing.T, msg actor.MessageInterface) actormsg.HarborResult {
 	t.Helper()
 	var err error
 	if Name == "" {
@@ -93,7 +95,7 @@ func (c *client) askMgr(t *testing.T, msg actor.MessageInterface) mgrView {
 	return openMgr(t, waitMgr(t, c.mgr))
 }
 
-func waitHarbor(t *testing.T, ch <-chan Result) Result {
+func waitHarbor(t *testing.T, ch <-chan actormsg.HarborResult) actormsg.HarborResult {
 	t.Helper()
 	select {
 	case r := <-ch:
@@ -101,10 +103,10 @@ func waitHarbor(t *testing.T, ch <-chan Result) Result {
 	case <-time.After(time.Second):
 		t.Fatal("no harbor result")
 	}
-	return Result{}
+	return actormsg.HarborResult{}
 }
 
-func waitMgr(t *testing.T, ch <-chan harbormgr.Result) harbormgr.Result {
+func waitMgr(t *testing.T, ch <-chan actormsg.HarbormgrResult) actormsg.HarbormgrResult {
 	t.Helper()
 	select {
 	case r := <-ch:
@@ -112,7 +114,7 @@ func waitMgr(t *testing.T, ch <-chan harbormgr.Result) harbormgr.Result {
 	case <-time.After(time.Second):
 		t.Fatal("no harbormgr result")
 	}
-	return harbormgr.Result{}
+	return actormsg.HarbormgrResult{}
 }
 
 type mgrView struct {
@@ -125,7 +127,7 @@ type mgrView struct {
 	Name  string
 }
 
-func openMgr(t *testing.T, r harbormgr.Result) mgrView {
+func openMgr(t *testing.T, r actormsg.HarbormgrResult) mgrView {
 	t.Helper()
 	body, ok := r.Env.Body()
 	if !ok {
@@ -133,13 +135,13 @@ func openMgr(t *testing.T, r harbormgr.Result) mgrView {
 	}
 	var v mgrView
 	switch m := body.(type) {
-	case *proto.RegisterAddrResult:
+	case *harborproto.RegisterAddrResult:
 		v = mgrView{ID: m.ID, Node: m.NodeID, Fresh: m.Fresh, OK: m.OK, Err: m.Err, Addr: m.Addr}
-	case *proto.RegisterNameResult:
+	case *harborproto.RegisterNameResult:
 		v = mgrView{ID: m.ID, Node: m.NodeID, OK: m.OK, Err: m.Err, Addr: m.Addr, Name: m.Name}
-	case *proto.QueryAddrResult:
+	case *harborproto.QueryAddrResult:
 		v = mgrView{ID: m.ID, Node: m.NodeID, OK: m.OK, Err: m.Err, Addr: m.Addr, Name: m.Name}
-	case *proto.UnregisterAddrResult:
+	case *harborproto.UnregisterAddrResult:
 		v = mgrView{ID: m.ID, Node: m.NodeID, OK: m.OK, Err: m.Err, Addr: m.Addr}
 	default:
 		t.Fatalf("unknown result %T", body)
@@ -169,8 +171,8 @@ func startBoth(t *testing.T, addr string) (*client, string) {
 	}
 	t.Cleanup(Stop)
 	c := &client{
-		harbor: make(chan Result, 4),
-		mgr:    make(chan harbormgr.Result, 4),
+		harbor: make(chan actormsg.HarborResult, 4),
+		mgr:    make(chan actormsg.HarbormgrResult, 4),
 	}
 	pid, err := actor.Spawn(c)
 	if err != nil {
@@ -183,39 +185,39 @@ func startBoth(t *testing.T, addr string) (*client, string) {
 	return c, bound
 }
 
-func regName(id uint64, name string) *RegisterName {
-	m := &RegisterName{ID: id, Name: name}
-	m.SetCmd(CmdRegisterName)
+func regName(id uint64, name string) *actormsg.HarborRegisterName {
+	m := &actormsg.HarborRegisterName{ID: id, Name: name}
+	m.SetCmd(actormsg.CmdHarborRegisterName)
 	return m
 }
 
-func unregName(id uint64, name string) *UnregisterName {
-	m := &UnregisterName{ID: id, Name: name}
-	m.SetCmd(CmdUnregisterName)
+func unregName(id uint64, name string) *actormsg.HarborUnregisterName {
+	m := &actormsg.HarborUnregisterName{ID: id, Name: name}
+	m.SetCmd(actormsg.CmdHarborUnregisterName)
 	return m
 }
 
-func query(id uint64, name string) *QueryAddr {
-	m := &QueryAddr{ID: id, Name: name}
-	m.SetCmd(CmdQueryAddr)
+func query(id uint64, name string) *actormsg.HarborQueryAddr {
+	m := &actormsg.HarborQueryAddr{ID: id, Name: name}
+	m.SetCmd(actormsg.CmdHarborQueryAddr)
 	return m
 }
 
-func mgrRegAddr(id uint64, addr string) *harbormgr.RegisterAddr {
-	m := &harbormgr.RegisterAddr{RegisterAddr: proto.RegisterAddr{ID: id, Addr: addr}}
-	m.SetCmd(harbormgr.CmdKey(harbormgr.CmdRegisterAddr))
+func mgrRegAddr(id uint64, addr string) *actormsg.HarbormgrRegisterAddr {
+	m := &actormsg.HarbormgrRegisterAddr{RegisterAddr: harborproto.RegisterAddr{ID: id, Addr: addr}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterAddr))
 	return m
 }
 
-func mgrRegName(id, node uint64, addr, name string) *harbormgr.RegisterName {
-	m := &harbormgr.RegisterName{RegisterName: proto.RegisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
-	m.SetCmd(harbormgr.CmdKey(harbormgr.CmdRegisterName))
+func mgrRegName(id, node uint64, addr, name string) *actormsg.HarbormgrRegisterName {
+	m := &actormsg.HarbormgrRegisterName{RegisterName: harborproto.RegisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterName))
 	return m
 }
 
-func mgrQuery(id uint64, name string) *harbormgr.QueryAddr {
-	m := &harbormgr.QueryAddr{QueryAddr: proto.QueryAddr{ID: id, Name: name}}
-	m.SetCmd(harbormgr.CmdKey(harbormgr.CmdQueryAddr))
+func mgrQuery(id uint64, name string) *actormsg.HarbormgrQueryAddr {
+	m := &actormsg.HarbormgrQueryAddr{QueryAddr: harborproto.QueryAddr{ID: id, Name: name}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdQueryAddr))
 	return m
 }
 
@@ -223,31 +225,31 @@ func TestDirectory(t *testing.T) {
 	c, addr := startBoth(t, "127.0.0.1:0")
 
 	r := c.ask(t, regName(1, ""))
-	if r.OK || r.Err != harbormgr.ErrInvalid {
+	if r.OK || r.Err != actormsg.ErrHarbormgrInvalid {
 		t.Fatalf("empty name: %+v", r)
 	}
 	r = c.ask(t, regName(2, "@a"))
-	if !r.OK || r.ID != 2 || r.Addr != addr || r.Name != "@a" || r.Req != CmdRegisterName {
+	if !r.OK || r.ID != 2 || r.Addr != addr || r.Name != "@a" || r.Req != actormsg.CmdHarborRegisterName {
 		t.Fatalf("register: %+v", r)
 	}
 	r = c.ask(t, regName(3, "@a"))
-	if r.OK || r.Err != harbormgr.ErrTaken {
+	if r.OK || r.Err != actormsg.ErrHarbormgrTaken {
 		t.Fatalf("register again: %+v", r)
 	}
 	r = c.ask(t, query(4, "@a"))
-	if !r.OK || r.Addr != addr || r.Name != "@a" || r.Req != CmdQueryAddr {
+	if !r.OK || r.Addr != addr || r.Name != "@a" || r.Req != actormsg.CmdHarborQueryAddr {
 		t.Fatalf("query: %+v", r)
 	}
 	r = c.ask(t, unregName(5, "@a"))
-	if !r.OK || r.Req != CmdUnregisterName {
+	if !r.OK || r.Req != actormsg.CmdHarborUnregisterName {
 		t.Fatalf("unregister: %+v", r)
 	}
 	r = c.ask(t, query(6, "@a"))
-	if r.OK || r.Err != harbormgr.ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("query after unregister: %+v", r)
 	}
 	r = c.ask(t, unregName(7, "@missing"))
-	if r.OK || r.Err != harbormgr.ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("unregister missing: %+v", r)
 	}
 }
@@ -262,7 +264,7 @@ func TestNameTaken(t *testing.T) {
 		t.Fatalf("other name: %+v", r)
 	}
 	r := c.ask(t, regName(3, "@a"))
-	if r.OK || r.Err != harbormgr.ErrTaken || r.Addr != "127.0.0.1:2" {
+	if r.OK || r.Err != actormsg.ErrHarbormgrTaken || r.Addr != "127.0.0.1:2" {
 		t.Fatalf("taken: %+v", r)
 	}
 }
@@ -291,7 +293,7 @@ func TestStopUnregistersAddr(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		r := c.askMgr(t, mgrQuery(2, "@a"))
-		if !r.OK && r.Err == harbormgr.ErrUnknown {
+		if !r.OK && r.Err == actormsg.ErrHarbormgrUnknown {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -317,7 +319,7 @@ func TestHeartbeatReregister(t *testing.T) {
 	missed := false
 	for {
 		r := c.askMgr(t, mgrQuery(3, "@a"))
-		if !r.OK && r.Err == harbormgr.ErrUnknown {
+		if !r.OK && r.Err == actormsg.ErrHarbormgrUnknown {
 			missed = true
 		}
 		if missed && r.OK && r.Addr == addr {
@@ -336,7 +338,7 @@ func TestQueryBusy(t *testing.T) {
 	t.Cleanup(func() { maxQueued = prev })
 	c := startLoose(t)
 	r := c.ask(t, query(1, "@a"))
-	if r.OK || r.Err != ErrBusy {
+	if r.OK || r.Err != actormsg.ErrHarborBusy {
 		t.Fatalf("busy: %+v", r)
 	}
 }
@@ -350,7 +352,7 @@ func TestQueryTimeout(t *testing.T) {
 	})
 	c := startLoose(t)
 	r := c.ask(t, query(1, "@a"))
-	if r.OK || r.Err != ErrTimeout {
+	if r.OK || r.Err != actormsg.ErrHarborTimeout {
 		t.Fatalf("timeout: %+v", r)
 	}
 }
@@ -449,12 +451,12 @@ func TestPeerDial(t *testing.T) {
 	}
 	_ = inbound.SetDeadline(time.Time{})
 	_ = inbound.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := proto.Read(inbound); err == nil {
+	if _, err := harborproto.Read(inbound); err == nil {
 		t.Fatal("inbound stayed open")
 	}
 
 	_ = outbound.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	if _, err := proto.Read(outbound); err == nil {
+	if _, err := harborproto.Read(outbound); err == nil {
 		t.Fatal("unexpected frame")
 	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 		t.Fatalf("outbound closed: %v", err)
@@ -581,7 +583,7 @@ func TestSendLocalOrRemote(t *testing.T) {
 			return
 		}
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				errCh <- err
 				return
@@ -687,7 +689,7 @@ func TestSendNameAck(t *testing.T) {
 			return
 		}
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				errCh <- err
 				return
@@ -700,12 +702,12 @@ func TestSendNameAck(t *testing.T) {
 				errCh <- err
 				return
 			}
-			ack, err := proto.Pack(cmdPeerAck, &peerAck{ID: body.ID})
+			ack, err := harborproto.Pack(cmdPeerAck, &peerAck{ID: body.ID})
 			if err != nil {
 				errCh <- err
 				return
 			}
-			errCh <- proto.Write(conn, ack)
+			errCh <- harborproto.Write(conn, ack)
 			return
 		}
 	}()
@@ -749,7 +751,7 @@ func TestSendNameAck(t *testing.T) {
 		}
 		_ = writePeerHello(conn, quiet.Node, silentAddr)
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				return
 			}
@@ -839,7 +841,7 @@ func TestCallName(t *testing.T) {
 			return
 		}
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				errCh <- err
 				return
@@ -856,26 +858,26 @@ func TestCallName(t *testing.T) {
 				errCh <- errors.New("call frame")
 				return
 			}
-			ack, err := proto.Pack(cmdPeerAck, &peerAck{ID: body.ID})
+			ack, err := harborproto.Pack(cmdPeerAck, &peerAck{ID: body.ID})
 			if err != nil {
 				errCh <- err
 				return
 			}
-			if err := proto.Write(conn, ack); err != nil {
+			if err := harborproto.Write(conn, ack); err != nil {
 				errCh <- err
 				return
 			}
-			reply, err := proto.Pack(cmdPeerReply, &peerReply{From: body.From, Session: body.Session, Value: `"ok"`})
+			reply, err := harborproto.Pack(cmdPeerReply, &peerReply{From: body.From, Session: body.Session, Data: `"ok"`})
 			if err != nil {
 				errCh <- err
 				return
 			}
-			if err := proto.Write(conn, reply); err != nil {
+			if err := harborproto.Write(conn, reply); err != nil {
 				errCh <- err
 				return
 			}
 			for {
-				if _, err := proto.Read(conn); err != nil {
+				if _, err := harborproto.Read(conn); err != nil {
 					return
 				}
 			}
@@ -957,15 +959,15 @@ func TestCallReply(t *testing.T) {
 		t.Fatalf("caller name: %+v", r)
 	}
 	body := peerSend{Dest: "callee", Cmd: "ping", Session: 42, From: callerName}
-	frame, err := proto.Pack(cmdPeerSend, &body)
+	frame, err := harborproto.Pack(cmdPeerSend, &body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := proto.Write(conn, frame); err != nil {
+	if err := harborproto.Write(conn, frame); err != nil {
 		t.Fatal(err)
 	}
 	for {
-		f, err := proto.Read(conn)
+		f, err := harborproto.Read(conn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -976,10 +978,51 @@ func TestCallReply(t *testing.T) {
 		if err := f.Decode(&reply); err != nil {
 			t.Fatal(err)
 		}
-		if reply.Session != 42 || reply.From != callerName || reply.Err != "" || reply.Value != `"pong"` {
+		if reply.Session != 42 || reply.From != callerName || reply.Err != "" || reply.Cmd != "" || reply.Data != `"pong"` {
 			t.Fatalf("reply: %+v", reply)
 		}
 		return
+	}
+}
+
+type replyView struct {
+	actor.BaseMessage
+	RoomID string `json:"roomid"`
+}
+
+type replyHost struct {
+	actor.ActorContext
+}
+
+func (h *replyHost) Init() error {
+	return h.RegisterCmd("match.view", func() actor.MessageInterface { return &replyView{} }, func(actor.Envelope) {})
+}
+
+func TestDecodeReplyUsesCallerFactory(t *testing.T) {
+	host := &replyHost{}
+	pid, err := actor.Spawn(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = actor.StopActor(pid) })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := actor.WaitInit(ctx, pid); err != nil {
+		t.Fatal(err)
+	}
+	msg := &replyView{RoomID: "r1"}
+	msg.SetCmd("match.view")
+	cmd, data, err := packReply(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != "match.view" {
+		t.Fatalf("cmd %s", cmd)
+	}
+	got := decodeReply(pid, cmd, data)
+	view, ok := got.(*replyView)
+	if !ok || view.RoomID != "r1" {
+		t.Fatalf("%#v", got)
 	}
 }
 
@@ -992,8 +1035,8 @@ func startLoose(t *testing.T) *client {
 	}
 	t.Cleanup(Stop)
 	c := &client{
-		harbor: make(chan Result, 4),
-		mgr:    make(chan harbormgr.Result, 1),
+		harbor: make(chan actormsg.HarborResult, 4),
+		mgr:    make(chan actormsg.HarbormgrResult, 1),
 	}
 	pid, err := actor.Spawn(c)
 	if err != nil {
@@ -1047,7 +1090,7 @@ func TestPeerRejectsStaleNode(t *testing.T) {
 	if err := writePeerHello(conn, hello.NodeID+100, fake); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := proto.Read(conn); err == nil {
+	if _, err := harborproto.Read(conn); err == nil {
 		t.Fatal("stale node stayed up")
 	}
 }

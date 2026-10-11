@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gonet"
+
+	"gonet/services/internal/actormsg"
 )
 
 func TestPingPong(t *testing.T) {
@@ -21,7 +23,7 @@ func TestPingPong(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := gonet.Pack(cmdPing, struct{}{})
+	msg, err := gonet.Pack(actormsg.CmdLauncherPing, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}

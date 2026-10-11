@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
 func TestHello(t *testing.T) {
@@ -22,7 +24,7 @@ func TestHello(t *testing.T) {
 		t.Fatal("second start")
 	}
 
-	msg, err := actor.Pack(CmdKey(CmdHello), struct{}{})
+	msg, err := actor.Pack(actormsg.CmdKey(actormsg.HarbormgrCmdHello), struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,15 +39,15 @@ func TestHello(t *testing.T) {
 
 type client struct {
 	actor.ActorContext
-	ch chan Result
+	ch chan actormsg.HarbormgrResult
 }
 
 func (c *client) Init() error {
-	return c.RegisterCmd(CmdKey(CmdResult), func() actor.MessageInterface { return &Result{} }, c.onResult)
+	return c.RegisterCmd(actormsg.CmdKey(actormsg.HarbormgrCmdResult), func() actor.MessageInterface { return &actormsg.HarbormgrResult{} }, c.onResult)
 }
 
 func (c *client) onResult(e actor.Envelope) {
-	m, ok := e.Msg.(*Result)
+	m, ok := e.Msg.(*actormsg.HarbormgrResult)
 	if !ok {
 		return
 	}
@@ -77,7 +79,7 @@ type view struct {
 	Name  string
 }
 
-func open(t *testing.T, r Result) view {
+func open(t *testing.T, r actormsg.HarbormgrResult) view {
 	t.Helper()
 	body, ok := r.Env.Body()
 	if !ok {
@@ -85,17 +87,17 @@ func open(t *testing.T, r Result) view {
 	}
 	v := view{Cmd: r.Env.Cmd}
 	switch m := body.(type) {
-	case *proto.RegisterAddrResult:
+	case *harborproto.RegisterAddrResult:
 		v.ID, v.Node, v.Fresh, v.OK, v.Err, v.Addr = m.ID, m.NodeID, m.Fresh, m.OK, m.Err, m.Addr
-	case *proto.RegisterNameResult:
+	case *harborproto.RegisterNameResult:
 		v.ID, v.Node, v.OK, v.Err, v.Addr, v.Name = m.ID, m.NodeID, m.OK, m.Err, m.Addr, m.Name
-	case *proto.HeartbeatResult:
+	case *harborproto.HeartbeatResult:
 		v.ID, v.Node, v.OK, v.Err, v.Addr = m.ID, m.NodeID, m.OK, m.Err, m.Addr
-	case *proto.QueryAddrResult:
+	case *harborproto.QueryAddrResult:
 		v.ID, v.Node, v.OK, v.Err, v.Addr, v.Name = m.ID, m.NodeID, m.OK, m.Err, m.Addr, m.Name
-	case *proto.UnregisterNameResult:
+	case *harborproto.UnregisterNameResult:
 		v.ID, v.Node, v.OK, v.Err, v.Addr, v.Name = m.ID, m.NodeID, m.OK, m.Err, m.Addr, m.Name
-	case *proto.UnregisterAddrResult:
+	case *harborproto.UnregisterAddrResult:
 		v.ID, v.Node, v.OK, v.Err, v.Addr = m.ID, m.NodeID, m.OK, m.Err, m.Addr
 	default:
 		t.Fatalf("unknown result %T", body)
@@ -111,7 +113,7 @@ func startPair(t *testing.T) *client {
 		t.Fatal(err)
 	}
 	t.Cleanup(Stop)
-	c := &client{ch: make(chan Result, 4)}
+	c := &client{ch: make(chan actormsg.HarbormgrResult, 4)}
 	pid, err := actor.Spawn(c)
 	if err != nil {
 		t.Fatal(err)
@@ -123,39 +125,39 @@ func startPair(t *testing.T) *client {
 	return c
 }
 
-func regAddr(id, node uint64, addr string) *RegisterAddr {
-	m := &RegisterAddr{RegisterAddr: proto.RegisterAddr{ID: id, NodeID: node, Addr: addr}}
-	m.SetCmd(CmdKey(CmdRegisterAddr))
+func regAddr(id, node uint64, addr string) *actormsg.HarbormgrRegisterAddr {
+	m := &actormsg.HarbormgrRegisterAddr{RegisterAddr: harborproto.RegisterAddr{ID: id, NodeID: node, Addr: addr}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterAddr))
 	return m
 }
 
-func regName(id, node uint64, addr, name string) *RegisterName {
-	m := &RegisterName{RegisterName: proto.RegisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
-	m.SetCmd(CmdKey(CmdRegisterName))
+func regName(id, node uint64, addr, name string) *actormsg.HarbormgrRegisterName {
+	m := &actormsg.HarbormgrRegisterName{RegisterName: harborproto.RegisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdRegisterName))
 	return m
 }
 
-func beat(id, node uint64) *Heartbeat {
-	m := &Heartbeat{Heartbeat: proto.Heartbeat{ID: id, NodeID: node}}
-	m.SetCmd(CmdKey(CmdHeartbeat))
+func beat(id, node uint64) *actormsg.HarbormgrHeartbeat {
+	m := &actormsg.HarbormgrHeartbeat{Heartbeat: harborproto.Heartbeat{ID: id, NodeID: node}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdHeartbeat))
 	return m
 }
 
-func query(id uint64, name string) *QueryAddr {
-	m := &QueryAddr{QueryAddr: proto.QueryAddr{ID: id, Name: name}}
-	m.SetCmd(CmdKey(CmdQueryAddr))
+func query(id uint64, name string) *actormsg.HarbormgrQueryAddr {
+	m := &actormsg.HarbormgrQueryAddr{QueryAddr: harborproto.QueryAddr{ID: id, Name: name}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdQueryAddr))
 	return m
 }
 
-func unregName(id, node uint64, addr, name string) *UnregisterName {
-	m := &UnregisterName{UnregisterName: proto.UnregisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
-	m.SetCmd(CmdKey(CmdUnregisterName))
+func unregName(id, node uint64, addr, name string) *actormsg.HarbormgrUnregisterName {
+	m := &actormsg.HarbormgrUnregisterName{UnregisterName: harborproto.UnregisterName{ID: id, NodeID: node, Addr: addr, Name: name}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnregisterName))
 	return m
 }
 
-func unregAddr(id, node uint64, addr string) *UnregisterAddr {
-	m := &UnregisterAddr{UnregisterAddr: proto.UnregisterAddr{ID: id, NodeID: node, Addr: addr}}
-	m.SetCmd(CmdKey(CmdUnregisterAddr))
+func unregAddr(id, node uint64, addr string) *actormsg.HarbormgrUnregisterAddr {
+	m := &actormsg.HarbormgrUnregisterAddr{UnregisterAddr: harborproto.UnregisterAddr{ID: id, NodeID: node, Addr: addr}}
+	m.SetCmd(actormsg.CmdKey(actormsg.HarbormgrCmdUnregisterAddr))
 	return m
 }
 
@@ -163,7 +165,7 @@ func TestDirectory(t *testing.T) {
 	c := startPair(t)
 
 	r := c.ask(t, regName(1, 1, "127.0.0.1:1", "@a"))
-	if r.OK || r.Err != ErrUnknown || r.ID != 1 {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown || r.ID != 1 {
 		t.Fatalf("name before addr: %+v", r)
 	}
 	r = c.ask(t, regAddr(2, 0, "127.0.0.1:1"))
@@ -172,7 +174,7 @@ func TestDirectory(t *testing.T) {
 	}
 	node := r.Node
 	r = c.ask(t, regAddr(3, 0, "127.0.0.1:1"))
-	if r.OK || r.Err != ErrTaken {
+	if r.OK || r.Err != actormsg.ErrHarbormgrTaken {
 		t.Fatalf("second server takes addr: %+v", r)
 	}
 	r = c.ask(t, regAddr(4, node, "127.0.0.1:1"))
@@ -194,7 +196,7 @@ func TestDirectory(t *testing.T) {
 	}
 	other := r.Node
 	r = c.ask(t, regName(8, other, "127.0.0.1:2", "@a"))
-	if r.ID != 8 || r.OK || r.Err != ErrTaken || r.Addr != "127.0.0.1:1" {
+	if r.ID != 8 || r.OK || r.Err != actormsg.ErrHarbormgrTaken || r.Addr != "127.0.0.1:1" {
 		t.Fatalf("taken: %+v", r)
 	}
 	r = c.ask(t, query(9, "@a"))
@@ -203,7 +205,7 @@ func TestDirectory(t *testing.T) {
 	}
 
 	r = c.ask(t, unregName(10, other, "127.0.0.1:2", "@a"))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("unregister wrong node: %+v", r)
 	}
 	r = c.ask(t, unregName(11, node, "127.0.0.1:1", "@a"))
@@ -216,11 +218,11 @@ func TestDirectory(t *testing.T) {
 	}
 
 	r = c.ask(t, beat(13, 99))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("heartbeat unknown: %+v", r)
 	}
 	r = c.ask(t, query(14, "@missing"))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("query missing: %+v", r)
 	}
 
@@ -229,7 +231,7 @@ func TestDirectory(t *testing.T) {
 		t.Fatalf("unregister addr: %+v", r)
 	}
 	r = c.ask(t, query(16, "@a"))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("query after addr gone: %+v", r)
 	}
 }
@@ -264,11 +266,11 @@ func TestAddrExpire(t *testing.T) {
 	}
 	time.Sleep(120 * time.Millisecond)
 	r = c.ask(t, query(5, "@a"))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("expired: %+v", r)
 	}
 	r = c.ask(t, beat(6, node))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("heartbeat after expire: %+v", r)
 	}
 	r = c.ask(t, regAddr(7, node, "127.0.0.1:1"))
@@ -276,7 +278,7 @@ func TestAddrExpire(t *testing.T) {
 		t.Fatalf("reclaim after expire: %+v", r)
 	}
 	r = c.ask(t, query(8, "@a"))
-	if r.OK || r.Err != ErrUnknown {
+	if r.OK || r.Err != actormsg.ErrHarbormgrUnknown {
 		t.Fatalf("name dropped on expire: %+v", r)
 	}
 	r = c.ask(t, regAddr(9, node+10, "127.0.0.1:8"))
@@ -293,7 +295,7 @@ func TestAddrExpire(t *testing.T) {
 		t.Fatalf("new node takes addr: %+v", r)
 	}
 	r = c.ask(t, regAddr(11, node, "127.0.0.1:1"))
-	if r.OK || r.Err != ErrTaken {
+	if r.OK || r.Err != actormsg.ErrHarbormgrTaken {
 		t.Fatalf("old id addr held: %+v", r)
 	}
 }
@@ -321,7 +323,7 @@ func TestReclaimMovesAddr(t *testing.T) {
 		t.Fatalf("old addr free: %+v", r)
 	}
 	r = c.ask(t, regAddr(6, 0, "127.0.0.1:9"))
-	if r.OK || r.Err != ErrTaken {
+	if r.OK || r.Err != actormsg.ErrHarbormgrTaken {
 		t.Fatalf("new addr still held: %+v", r)
 	}
 }

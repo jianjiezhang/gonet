@@ -40,6 +40,25 @@ redis_db = 2
 	}
 }
 
+func TestLoadNodeFlags(t *testing.T) {
+	path := writeConfig(t, `
+center = false
+guild = true
+idgen = true
+friend = true
+match = true
+onlinemgr = true
+role = false
+`)
+	if err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Get()
+	if cfg.Center || cfg.Role || !cfg.Guild || !cfg.Idgen || !cfg.Friend || !cfg.Match || !cfg.Onlinemgr {
+		t.Fatalf("%+v", cfg)
+	}
+}
+
 func TestLoadRedisRejectsBadDB(t *testing.T) {
 	path := writeConfig(t, "redis_db = -1\n")
 	if err := Load(path); err == nil {

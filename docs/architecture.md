@@ -25,7 +25,7 @@
 
 另有：
 
-- `config/config.toml`：玩家口、debug 口、`login_token`、MySQL、Redis
+- `conf/config.toml`：默认单节点。玩家口、debug 口、`login_token`、MySQL、Redis，以及全部服务开关
 - `lib/packet`：TCP 长度前缀帧
 - `lib/net`：客户端 `Codec`（默认 JSON），`ReadMsg`/`WriteMsg`
 - `store`：MySQL 连接池，表 `role`、`t_mission`、好友和公会；不是 actor
@@ -43,7 +43,8 @@
 project/
   main.go                 # 配置、store、SpawnNamed launcher、NewService watchdog、ListenDebug
   web/                    # 页面、/api/login、/api/session
-  config/                 # config.toml、任务静态表
+  conf/                   # 节点、端口、数据库这些系统配置
+  config/                 # 任务等业务静态表
   lib/
     packet/               # 4 字节长度 + 2 字节命令号 + data
     net/                  # 帧的收发和 data 的 JSON；不带具体命令号
@@ -74,7 +75,7 @@ project/
 
 ## 3. 启动顺序
 
-必须在项目根运行，才能读到 `config/config.toml`。
+必须在项目根运行，才能读到 `conf/config.toml`。
 
 ```text
 main
@@ -113,14 +114,14 @@ launcher.WaitService(ctx, impl, serviceName)                       // 阻塞；�
 - 一个 actor 一个 mailbox，**Dispatch 里禁止 Accept/Read/堵网**。
 - mailbox 协程上的 info、warn、error 前面带这个 actor 的别名，例如 `[role/39000001]`。玩家协议写出前再加 `[send]`，读入后加 `[recv]`，后面是命令和 JSON。readLoop 和等登录不在 mailbox 上，进入时带上同一个别名。
 - `Spawn` 立刻返回；Init 是 mailbox 第一条系统消息。`starting` 时只收 init，其它投递得 `ErrNotReady`。就绪用 `WaitInit` 或 `SpawnAsync(InitFrom)`；`InitTimeout<=0` 只等 Init，不超时失败。
-- `Send`/`Call` 走 pid；`SendName`/`CallName` 走别名。入队前把业务消息编成 JSON（`*BaseMessage`），`Dispatch` 再按 cmd `Unpack`。`Call` 是异步的，回复走 `.response`（回复值仍是原来的 Go 值）。`d<=0` 不排超时。Dispatch 里禁止 `SuspendCall`；对自己会立刻 `ErrSuspendSelf`。
+- `Send`/`Call` 走 pid；`SendName`/`CallName` 走别名。入队前把业务消息编成 JSON（`*BaseMessage`），`Dispatch` 再按 cmd `Unpack`。`Call` 是异步的，回复走 `.response`（回复值仍是原来的 Go 值）。`d<=0` 不排超时。Dispatch 里用异步 `Call`，不要 `SuspendCall`。
 - `SendMemory`/`SendMemoryName`（以及 `CallMemory`）不编码，原指针只在本进程传递。`Conn`、创建 actor 的 `Impl` 走这条。`.` 开头的内核消息（`.init`、`.response`、`.call.timeout`）也不进 JSON。
 - 停机可用 `StopActorWait` / `StopWait` 带超时。
 - `Monitor` 含每 actor 的 mailbox high、投递失败与 Call 超时计数。
 - 周期逻辑用 `Timeout` 再续一次，不要旁路 ticker（role 心跳检查、30 秒存盘已如此）。
 - 停自己用 `Exit()`/`Kill`，不要在 Dispatch 里同步 `StopActor(Self())`。
 - 已经 `Pack` 过的 `*BaseMessage` 会原样入队。`net.Conn`、actor 实现不要 `Pack`，也不要走 `Send`，用 `SendMemory` / `CallMemory`。
-- `RegisterCmd`：同 cmd 再注册会覆盖全局工厂，类型变了打日志；handler 仍按 actor 各绑各的。
+- `RegisterCmd`：工厂和处理函数都记在本 actor 上。别的 actor 用同一个 cmd 互不影响。本 actor 再登记且类型变了会打日志。
 
 创建：`Spawn` / `SpawnNamed` / `SpawnWith` 是内核入口。业务只走 launcher（bootstrap launcher 除外）。
 
@@ -154,7 +155,7 @@ Accept
 [4 字节大端 uint32 = 后面的字节数 N][2 字节大端命令号][data]
 ```
 
-`N` 含命令号和 data，不含长度自己。`N<2`、命令号为 0，或 `N>64KiB` 失败。data 默认是 payload 的 JSON；没有 payload 时 data 为空，不写 `null`。服务内部仍用命令名，写出时换成命令号。`ReadMsg` 按命令名 Unpack；本进程没登记该名字时仍是信封（测试客户端）。命令号不认识或 data 解不开是 `ErrCodec`，连接不断；帧错误则断开。不要 `import "game/lib"`。watchdog/role 不要再 `gonet.Unpack` 客户端包。
+`N` 含命令号和 data，不含长度自己。`N<2`、命令号为 0，或 `N>64KiB` 失败。data 默认是 payload 的 JSON；没有 payload 时 data 为空，不写 `null`。服务内部仍用命令名，写出时换成命令号。`ReadMsg` 用调用方传入的解包函数按命令名解开；函数为 nil 或该 actor 没登记这个名字时仍是信封（测试客户端）。命令号不认识或 data 解不开是 `ErrCodec`，连接不断；帧错误则断开。不要 `import "game/lib"`。watchdog/role 不要再 `gonet.Unpack` 客户端包。
 
 | 号 | 方向 | 命令 | 含义 |
 |----|------|------|------|

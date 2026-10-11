@@ -6,15 +6,18 @@ import (
 	"time"
 
 	"gonet/actor"
-	"gonet/services/harbormgr/proto"
+
+	"gonet/services/internal/actormsg"
+	"gonet/services/internal/harborproto"
 )
 
-// cmdPeerHello 只出现在 harbor 与 harbor 的连接上。两边都报自己的节点编号和登记地址。
+// 节点之间的命令号。两边都报自己的节点编号和登记地址。
+// 和 harborproto 的 1–7 不是同一套，不能交给 Frame.Body。
 const (
-	cmdPeerHello uint16 = 1
-	cmdPeerSend  uint16 = 2
-	cmdPeerAck   uint16 = 3
-	cmdPeerReply uint16 = 4
+	cmdPeerHello uint16 = 101
+	cmdPeerSend  uint16 = 102
+	cmdPeerAck   uint16 = 103
+	cmdPeerReply uint16 = 104
 )
 
 type peerHello struct {
@@ -33,9 +36,9 @@ type peer struct {
 	addr    string
 	node    uint64
 	ep      *endpoint
-	out     chan proto.Frame
+	out     chan harborproto.Frame
 	dialing bool
-	hold    []proto.Frame
+	hold    []harborproto.Frame
 }
 
 type peerEvent struct {
@@ -45,10 +48,10 @@ type peerEvent struct {
 	addr   string
 	node   uint64
 	ep     *endpoint
-	out    chan proto.Frame
+	out    chan harborproto.Frame
 	stub   *peer
 	data   bool
-	frame  proto.Frame
+	frame  harborproto.Frame
 }
 
 func (a *Actor) publishSelf() {
@@ -143,7 +146,7 @@ func (a *Actor) dialPeer(pid uint64, stub *peer) {
 
 func (a *Actor) servePeer(pid uint64, conn net.Conn, dirAddr string, dialed bool, stub *peer, remoteNode uint64) {
 	ep := &endpoint{conn: conn}
-	out := make(chan proto.Frame, 16)
+	out := make(chan harborproto.Frame, 16)
 	quit := make(chan struct{})
 	defer close(quit)
 	defer ep.Close()
@@ -159,11 +162,11 @@ func (a *Actor) servePeer(pid uint64, conn net.Conn, dirAddr string, dialed bool
 		stub:   stub,
 	})
 
-	reads := make(chan proto.Frame, 8)
+	reads := make(chan harborproto.Frame, 8)
 	go func() {
 		defer close(reads)
 		for {
-			f, err := proto.Read(conn)
+			f, err := harborproto.Read(conn)
 			if err != nil {
 				return
 			}
@@ -231,7 +234,7 @@ func (a *Actor) onPeerUp(m *peerEvent) {
 		}
 		cur.ep.Close()
 	}
-	var held []proto.Frame
+	var held []harborproto.Frame
 	if cur != nil {
 		held = cur.hold
 	}
@@ -357,7 +360,7 @@ func keepDial(self, remote uint64, dialed bool) bool {
 }
 
 func postPeer(pid uint64, ev *peerEvent) {
-	ev.SetCmd(cmdPeer)
+	ev.SetCmd(actormsg.CmdHarborPeer)
 	post(pid, ev)
 }
 
@@ -369,20 +372,20 @@ func exchangeHello(conn net.Conn, node uint64, addr string) (peerHello, error) {
 }
 
 func writePeerHello(conn net.Conn, node uint64, addr string) error {
-	f, err := proto.Pack(cmdPeerHello, &peerHello{NodeID: node, Addr: addr})
+	f, err := harborproto.Pack(cmdPeerHello, &peerHello{NodeID: node, Addr: addr})
 	if err != nil {
 		return err
 	}
-	return proto.Write(conn, f)
+	return harborproto.Write(conn, f)
 }
 
 func readPeerHello(conn net.Conn) (peerHello, error) {
-	f, err := proto.Read(conn)
+	f, err := harborproto.Read(conn)
 	if err != nil {
 		return peerHello{}, err
 	}
 	if f.Cmd != cmdPeerHello {
-		return peerHello{}, proto.ErrEmpty
+		return peerHello{}, harborproto.ErrEmpty
 	}
 	var hello peerHello
 	if err := f.Decode(&hello); err != nil {
